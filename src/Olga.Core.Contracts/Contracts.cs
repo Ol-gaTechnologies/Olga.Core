@@ -1,0 +1,25 @@
+namespace Olga.Core.Contracts;
+
+public sealed record ApiError(string Code, string Message, string CorrelationId, IReadOnlyDictionary<string, string[]>? FieldErrors = null);
+public sealed record ProfileResponse(string MemberId, string DisplayName, string? Headline, string? Biography, string? Organization, string? Sector, string? Geography, string Visibility, string ETag, DateTimeOffset UpdatedAt);
+public sealed record ProfileUpdateRequest(string DisplayName, string? Headline, string? Biography, string? Organization, string? Sector, string? Geography, string Visibility = "MEMBERS");
+public sealed record ConsentRequest(string PurposeCode, string PolicyVersion, string Decision);
+public sealed record ConsentResponse(string PurposeCode, string PolicyVersion, string Decision, DateTimeOffset CapturedAt);
+public sealed record EventResponse(string EventId, string Name, DateTimeOffset StartsAt, DateTimeOffset EndsAt, string Status);
+public sealed record RegistrationResponse(string EventId, string MemberId, string Status, DateTimeOffset RegisteredAt);
+public sealed record LiveModeRequest(int DurationMinutes = 60);
+public sealed record LiveModeResponse(string SessionId, string EventId, string Status, DateTimeOffset ActiveUntil);
+public sealed record PresenceRequest(string CoarseCell, DateTimeOffset ObservedAt);
+public sealed record ConnectionRequestCreate(string RecipientMemberId, int ExpiresInDays = 14);
+public sealed record ConnectionRequestResponse(string RequestId, string SenderMemberId, string RecipientMemberId, string Status, DateTimeOffset ExpiresAt);
+public sealed record ConnectionDecisionRequest(string Decision);
+public sealed record ConnectionResponse(string ConnectionId, string MemberId, string Status, string ConversationId);
+public sealed record BlockRequest(string MemberId);
+public sealed record MessageCreateRequest(string MessageId, string Body);
+public sealed record MessageResponse(string MessageId, string ConversationId, string SenderMemberId, string Body, long ServerSequence, DateTimeOffset CreatedAt);
+public sealed record NotificationPreferenceRequest(string PurposeCode, string Channel, bool Enabled);
+public sealed record NotificationPreferenceResponse(string PurposeCode, string Channel, bool Enabled, DateTimeOffset UpdatedAt);
+public sealed record PrivacyRequestCreate(string RequestType);
+public sealed record PrivacyRequestResponse(string PrivacyRequestId, string RequestType, string Status, DateTimeOffset CreatedAt, DateTimeOffset DueAt);
+public sealed record SyncItem(long Sequence, string ResourceType, string ResourceId, string ChangeType, object? Payload, DateTimeOffset OccurredAt);
+public sealed record SyncResponse(IReadOnlyList<SyncItem> Items, long NextCursor, bool HasMore);

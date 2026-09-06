@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Olga.Core.Api/Olga.Core.Api.csproj" />
+    <Project Path="src/Olga.Core.Application/Olga.Core.Application.csproj" />
+    <Project Path="src/Olga.Core.Contracts/Olga.Core.Contracts.csproj" />
+    <Project Path="src/Olga.Core.Domain/Olga.Core.Domain.csproj" />
+    <Project Path="src/Olga.Core.Infrastructure/Olga.Core.Infrastructure.csproj" />
+    <Project Path="src/Olga.Core.Worker/Olga.Core.Worker.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Olga.Core.Tests/Olga.Core.Tests.csproj" />
+  </Folder>
+</Solution>
