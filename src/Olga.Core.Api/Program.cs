@@ -12,16 +12,16 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.ConfigureHttpJsonOptions(o => { o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower; o.SerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull; });
 builder.Services.AddOpenApi();
 builder.Services.AddHealthChecks();
-var connection = builder.Configuration.GetConnectionString("AzureSql");
+var connection = builder.Configuration.GetConnectionString("PostgreSql");
 var local = string.IsNullOrWhiteSpace(connection);
-if (local) builder.Services.AddDbContext<CoreDbContext>(o => o.UseInMemoryDatabase("olga-core-local"));
-else builder.Services.AddDbContext<CoreDbContext>(o => o.UseSqlServer(connection));
+if (local) builder.Services.AddDbContextPool<CoreDbContext>(o => o.UseInMemoryDatabase("olga-core-local"));
+else builder.Services.AddDbContextPool<CoreDbContext>(o => o.UseOlgaPostgreSql(connection!));
 builder.Services.AddScoped<ICoreStore>(sp => sp.GetRequiredService<CoreDbContext>());
 builder.Services.AddScoped<ICoreService, CoreService>();
 
 var app = builder.Build();
 var serviceToken = app.Configuration["ServiceAuthorization:Token"];
-if (!local && string.IsNullOrWhiteSpace(serviceToken)) throw new InvalidOperationException("ServiceAuthorization:Token is required when Azure SQL is configured.");
+if (!local && string.IsNullOrWhiteSpace(serviceToken)) throw new InvalidOperationException("ServiceAuthorization:Token is required when PostgreSQL is configured.");
 app.Use(async (context, next) =>
 {
     context.Response.Headers["X-Correlation-Id"] = context.TraceIdentifier;
@@ -32,6 +32,8 @@ app.Use(async (context, next) =>
     }
     catch (DomainException ex) { await Error(context, ex.StatusCode, ex.Code); }
     catch (DbUpdateConcurrencyException) { await Error(context, 409, "RESOURCE_VERSION_CONFLICT"); }
+    catch (DbUpdateException ex) when (PostgreSqlConfiguration.IsUniqueViolation(ex)) { await Error(context, 409, "RESOURCE_CONFLICT"); }
+    catch (Exception ex) when (PostgreSqlConfiguration.IsUnavailable(ex)) { await Error(context, 503, "DATABASE_UNAVAILABLE"); }
     catch (Exception) { await Error(context, 500, "INTERNAL_ERROR"); }
 });
 

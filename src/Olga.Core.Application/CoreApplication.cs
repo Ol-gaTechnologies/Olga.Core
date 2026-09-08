@@ -167,7 +167,7 @@ public sealed class CoreService(ICoreStore store) : ICoreService
         if (string.IsNullOrWhiteSpace(request.CoarseCell) || request.CoarseCell.Length > 64) throw new DomainException("PRESENCE_INVALID");
         var session = store.LiveSessions.SingleOrDefault(x => x.EventId == eventId && x.MemberId == memberId && x.Status == "ACTIVE" && x.ActiveUntil > DateTimeOffset.UtcNow)
             ?? throw new DomainException("LIVE_MODE_NOT_ACTIVE", 403);
-        var observed = request.ObservedAt == default ? DateTimeOffset.UtcNow : request.ObservedAt;
+        var observed = request.ObservedAt == default ? DateTimeOffset.UtcNow : request.ObservedAt.ToUniversalTime();
         if (Math.Abs((DateTimeOffset.UtcNow - observed).TotalMinutes) > 10) throw new DomainException("PRESENCE_STALE");
         store.Add(new EventPresence { SessionId = session.SessionId, CoarseCell = request.CoarseCell, ObservedAt = observed, ExpiresAt = Min(session.ActiveUntil, observed.AddHours(2)) });
         AddOutbox("LIVE_MODE", session.SessionId, "EventPresenceRefreshed.v1", new { session_id = session.SessionId, event_id = eventId, member_id = memberId, expires_at = Min(session.ActiveUntil, observed.AddHours(2)) });
