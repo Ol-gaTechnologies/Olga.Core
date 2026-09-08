@@ -415,7 +415,7 @@
 | NLP | Azure OpenAI / Microsoft Foundry embeddings |
 | Moderation | Azure AI Content Safety F0 for development; production sizing from measured load |
 | Admin | Azure Static Web Apps |
-| IaC | Bicep + Azure Developer CLI; environment parameter files |
+| IaC | Terraform + Azure Developer CLI; environment parameter files |
 | CI/CD | GitHub Actions + OpenID Connect federation; no saved Azure client secret |
 | Rollout | Container Apps revisions + health checks + explicit rollback |
 | Tags | `product`, `environment`, `owner`, `costCenter`, `dataClass`, `expiryDate` |
@@ -473,7 +473,7 @@
 
 | Category | Stack |
 |---|---|
-| Editor | VS Code + C# + Python + ESLint + Bicep extensions |
+| Editor | VS Code + C# + Python + ESLint + Terraform extensions |
 | Mobile | Node.js LTS; pnpm; Expo CLI; Android Studio; Xcode |
 | Backend | .NET 10 SDK; Docker Desktop; PostgreSQL/SQL tooling |
 | NLP lab | Python 3.12; uv; JupyterLab; pandas; numpy; scikit-learn; sentence-transformers |
@@ -481,7 +481,7 @@
 | Unit/integration | xUnit; Testcontainers |
 | Web/mobile E2E | Playwright; Maestro |
 | Load | k6 |
-| Delivery | Git; GitHub Issues/Projects; GitHub Actions; Bicep; azd |
+| Delivery | Git; GitHub Issues/Projects; GitHub Actions; Terraform; azd |
 | Governance | ADRs; protected branches; secret scanning; release tags |
 
 # Repository
@@ -495,7 +495,7 @@
 | `services/nlp` | Standalone NLP API; matching pipeline; provider adapters; CandidateRepository |
 | `packages/contracts` | OpenAPI TypeScript client; schemas; reason-code catalog |
 | `ai/notebooks` | Anonymized datasets; baseline; evaluation; error analysis; model card |
-| `infra` | Bicep modules; environment parameters; budgets; dashboards; alerts |
+| `infra` | Terraform modules; environment parameters; budgets; dashboards; alerts |
 | `docs/adr` | Identity; offline; retention; ranking; deployment; service-selection decisions |
 
 # Cost Controls
