@@ -44,3 +44,5 @@ Development accepts `X-Member-Id` as a local-only identity substitute and seeds 
 ## Developer orientation
 
 Read [Architecture and data flow](ARCHITECTURE.md) before changing domain ownership or adding an endpoint. It explains each project, the main request flows, persistence schemas, cross-API events, and the rules that must remain true.
+
+The pull-request and environment deployment process is documented in [CI/CD operations](docs/CI_CD.md).
