@@ -26,7 +26,12 @@ Create GitHub Environments named `dev` and `prd`. Define these variables in each
 | `AZURE_RESOURCE_GROUP` | `rg-olga-dev-malaysiawest` | Container App resource group |
 | `CONTAINER_APP_NAME` | `ca-olga-core-api-dev` | Deployment target |
 
-No long-lived Azure client secret is required. Add one federated credential per environment to the deployment identity with subject `repo:Ol-gaTechnologies/Olga.Core:environment:dev` or `repo:Ol-gaTechnologies/Olga.Core:environment:prd`. Grant only `AcrPush` on the relevant registry and the minimum Container App update permission on the target resource group or app.
+No long-lived Azure client secret is required. This repository uses GitHub's immutable OIDC subject format. Configure the deployment identity's federated credentials with issuer `https://token.actions.githubusercontent.com`, audience `api://AzureADTokenExchange`, and these exact subjects:
+
+- `dev`: `repo:Ol-gaTechnologies@306667340/Olga.Core@1358930841:environment:dev`
+- `prd`: `repo:Ol-gaTechnologies@306667340/Olga.Core@1358930841:environment:prd`
+
+The `job_workflow_ref` claim is not the federated credential subject. Grant the deployment identity only `AcrPush` on the relevant registry and the minimum Container App update permission on the target resource group or app.
 
 Protect `prd` with required reviewers, prevent self-review, restrict it to `main`, and disable administrator bypass. Restrict `dev` to `develop`. Keep environment variables scoped to their environment.
 
