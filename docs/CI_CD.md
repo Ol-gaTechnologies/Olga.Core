@@ -51,7 +51,9 @@ The PostgreSQL server has public network access disabled. It uses the delegated 
 
 Configure the API container with `ConnectionStrings__PostgreSql` as a Key Vault-backed Container Apps secret reference. The connection must use the server FQDN above, database `olga_connect_dev`, port `5432`, and TLS certificate verification. Configure `ServiceAuthorization__Token` as a separate Key Vault-backed secret; the application refuses to start with PostgreSQL enabled when this setting is absent. Never place either secret value in GitHub variables or workflow YAML.
 
-The runtime managed identity needs permission to pull the image from ACR and read the referenced Key Vault secrets. PostgreSQL schema creation and upgrades must run from a trusted host with network access to the private database endpoint.
+The current registry uses the non-ABAC permission model. Grant the GitHub deployment identity `AcrPush` on `acrolgadevmalaysiaweste`, and grant the runtime managed identity only `AcrPull` on that registry. The runtime identity also needs permission to read the referenced Key Vault secrets. PostgreSQL schema creation and upgrades must run from a trusted host with network access to the private database endpoint.
+
+The API image listens on port `8080`. Configure Container Apps ingress and probes for that target port. Use `/health` as the process liveness endpoint and `/ready` as the readiness endpoint; `/ready` verifies PostgreSQL connectivity. Published images use the immutable commit tag `acrolgadevmalaysiaweste.azurecr.io/olga-core-api:<commit-sha>`, and deployment resolves that image to its digest.
 
 ## Runner choice
 

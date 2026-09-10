@@ -14,7 +14,7 @@ RUN dotnet publish "src/Olga.Core.Api/Olga.Core.Api.csproj" -c Release -o /app/p
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app
-ENV ASPNETCORE_HTTP_PORTS=8080
+ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 USER $APP_UID
 COPY --from=build /app/publish .
