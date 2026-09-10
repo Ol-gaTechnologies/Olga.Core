@@ -2,7 +2,7 @@
 
 The Core API is the authoritative product API for OLGA Connect. It owns member-facing product state and policy enforcement. It deliberately contains no text normalization, embedding, semantic ranking, model evaluation, or other NLP/AI implementation.
 
-The repository is independent from `Olga.Nlp` and can be versioned, built, tested, deployed, and granted database permissions separately. During the MVP both APIs may use one Azure SQL database, but each runtime must receive least-privilege access only to its owned schemas, views, and procedures.
+The repository is independent from `Olga.Nlp` and can be versioned, built, tested, deployed, and granted database permissions separately. During the MVP both APIs may use one PostgreSQL 17 database hosted on Azure Database for PostgreSQL Flexible Server, but each runtime must receive least-privilege access only to its owned schemas, views, and functions.
 
 ## What is implemented
 
@@ -14,7 +14,7 @@ The repository is independent from `Olga.Nlp` and can be versioned, built, teste
 - Notification preferences, privacy-request initiation, and authorization-filtered sync changes.
 - Transactional outbox records for cross-domain and NLP-related integration events.
 - Read-only internal NLP eligibility and relationship projections. Core remains the authority; NLP cannot change or bypass these decisions.
-- EF Core InMemory local development and Azure SQL configuration through `ConnectionStrings__AzureSql`.
+- EF Core InMemory local development and PostgreSQL configuration through `ConnectionStrings__PostgreSql`.
 
 ## What is intentionally not implemented yet
 

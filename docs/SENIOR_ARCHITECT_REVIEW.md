@@ -2,7 +2,7 @@
 
 ## Executive decision
 
-Keep two independent repositories and deployable APIs: `Olga.Core` for product authority and `Olga.Nlp/olga-nlp-api` for NLP processing and ranking. They may share one Azure SQL database for the MVP only when schema ownership, runtime identities, migrations, and release responsibilities remain explicit.
+Keep two independent repositories and deployable APIs: `Olga.Core` for product authority and `Olga.Nlp/olga-nlp-api` for NLP processing and ranking. They may share one PostgreSQL 17 database on Azure Database for PostgreSQL Flexible Server for the MVP only when schema ownership, runtime identities, migrations, and release responsibilities remain explicit.
 
 The separation is correct and materially reduces the risk that matching logic can grant product access. Neither repository is production-ready today. Core is an intentionally bounded implementation foundation; NLP has broader functional depth and passing tests but still contains production integration placeholders.
 
@@ -47,7 +47,7 @@ The canonical NLP repository is `D:\OLGA\Projects\Olga.Nlp\olga-nlp-api`. The ol
 
 1. Add real OIDC/JWT bearer validation to both APIs. Both currently read claims but do not configure an authentication handler. A static service token is not a replacement for workload identity.
 2. Implement application permission resolution and object-level authorization tests for member, admin, moderator, and NLP evaluator roles.
-3. Create version-controlled Azure SQL migrations for the full approved schemas, read-only NLP projections, grants, constraints, and seed data. The code mappings alone are not a database delivery artifact.
+3. Create version-controlled PostgreSQL migrations for the full approved schemas, read-only NLP projections, grants, constraints, identity columns, the shared `row_version` increment trigger, and seed data. The code mappings alone are not a database delivery artifact.
 4. Make outbox publishing real: publish to Service Bus with duplicate detection, mark `PublishedAt` only after acknowledgement, use bounded retry/backoff, and alert on dead letters. The Core worker currently logs pending events only.
 5. Replace NLP's `AzureEmbeddingProvider` placeholder and validate model identity, dimensions, timeout, retry, content handling, and managed-identity authentication.
 
@@ -63,14 +63,14 @@ The canonical NLP repository is `D:\OLGA\Projects\Olga.Nlp\olga-nlp-api`. The ol
 ### Priority 2 operability and scale
 
 1. Add OpenTelemetry traces, structured safe logging, metrics, dashboards, and alerts for latency, authorization denials, DB saturation, outbox lag, worker retries, and embedding backlog.
-2. Run representative concurrency and data-volume tests against Azure SQL. Confirm cached match p95 at or below 1.5 seconds and mutation acknowledgement p95 at or below 500 ms at the agreed load.
+2. Run representative concurrency and data-volume tests against Azure Database for PostgreSQL Flexible Server. Confirm cached match p95 at or below 1.5 seconds and mutation acknowledgement p95 at or below 500 ms at the agreed load.
 3. Validate row-level contention, canonical-pair uniqueness, filtered unique indexes, idempotency-key reuse, and outbox concurrency under parallel requests.
 4. Execute point-in-time restore and verify the initial RPO of 15 minutes and RTO of 4 hours.
 5. Add threat modeling and privacy reviews for intent text, coarse presence, chat, file assets, evaluation datasets, support exports, and telemetry.
 
 ## Design corrections recommended during implementation
 
-- Replace application-managed profile version numbers with SQL `rowversion` or a rigorously mapped concurrency token before production.
+- Replace application-managed profile version increments with the shared PostgreSQL `BEFORE UPDATE` trigger that increments a `bigint row_version`, mapped as an EF Core concurrency token and exposed as an ETag.
 - Introduce a durable `ops.IdempotencyRecord` for every externally retryable mutation; current Core replay behavior covers only selected operations.
 - Keep application services cohesive by bounded domain. Split the current `CoreService` into Profile, Consent/Event, Social/Chat, Sync, Privacy, and NLP-projection use cases as functionality grows.
 - Prefer one integration mechanism per decision: read-only SQL views for high-volume candidate filtering or service calls for strict runtime isolation. Record the choice and failure behavior.

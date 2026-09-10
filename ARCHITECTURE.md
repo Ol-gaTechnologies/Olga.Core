@@ -13,7 +13,7 @@ The Core API does not own NLP intents, embeddings, model versions, ranking confi
 | `Olga.Core.Domain` | Product entities, lifecycle state, and domain error type. Contains no web, database, or NLP dependencies. | None |
 | `Olga.Core.Contracts` | JSON request/response and error contracts exposed at the HTTP boundary. | None |
 | `Olga.Core.Application` | Use cases and invariant enforcement. Produces sync changes and outbox events in the same unit of work as business changes. | Domain, Contracts |
-| `Olga.Core.Infrastructure` | EF Core unit of work, Azure SQL schema mapping, indexes, and local seed data. | Application, Domain |
+| `Olga.Core.Infrastructure` | EF Core/Npgsql unit of work, PostgreSQL schema mapping, indexes, and local seed data. | Application, Domain |
 | `Olga.Core.Api` | Minimal API endpoints, correlation/error handling, identity extraction, OpenAPI, health, and readiness. | Application, Contracts, Infrastructure |
 | `Olga.Core.Worker` | Background outbox polling seam. Transport publishing and delivery confirmation remain to be implemented. | Infrastructure |
 | `Olga.Core.Tests` | Boundary and invariant tests for ETag updates, consent-gated Live Mode, connection/chat creation, idempotent messages, and blocking. | Application, Infrastructure |
@@ -118,11 +118,11 @@ NLP match request
   -> Core notification/sync workers create product-visible outcomes
 ```
 
-The implemented HTTP projection endpoints are an integration seam for local development. The target Azure SQL design may replace them with least-privilege read-only views (`nlp.vw_MemberContextEligibility` and `nlp.vw_MemberRelationship`) or retain service calls. Choose one production path and load-test it; do not run both as competing authorities.
+The implemented HTTP projection endpoints are an integration seam for local development. The target PostgreSQL design may replace them with least-privilege read-only views (`nlp.vw_member_context_eligibility` and `nlp.vw_member_relationship`) or retain service calls. Choose one production path and load-test it; do not run both as competing authorities.
 
 ## Security invariants
 
-- No client connects directly to Azure SQL, Blob Storage, or messaging infrastructure.
+- No client connects directly to Azure Database for PostgreSQL, Blob Storage, or messaging infrastructure.
 - Member identity comes from a validated token subject; `X-Member-Id` exists only for local development.
 - The internal NLP projection endpoints require a service identity outside Development.
 - Consent and authorization fail closed.

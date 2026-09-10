@@ -22,7 +22,7 @@ Create GitHub Environments named `dev` and `prd`. Define these variables in each
 | `AZURE_CLIENT_ID` | Application/client UUID | OIDC deployment identity |
 | `AZURE_TENANT_ID` | Microsoft Entra tenant UUID | Azure login |
 | `AZURE_SUBSCRIPTION_ID` | Azure subscription UUID | Azure login |
-| `ACR_LOGIN_SERVER` | `acrolgadev.azurecr.io` | Image registry |
+| `ACR_LOGIN_SERVER` | `acrolgadevmalaysiaweste.azurecr.io` | Image registry |
 | `AZURE_RESOURCE_GROUP` | `rg-olga-dev-malaysiawest` | Container App resource group |
 | `CONTAINER_APP_NAME` | `ca-olga-core-api-dev` | Deployment target |
 
@@ -31,6 +31,27 @@ No long-lived Azure client secret is required. Add one federated credential per 
 Protect `prd` with required reviewers, prevent self-review, restrict it to `main`, and disable administrator bypass. Restrict `dev` to `develop`. Keep environment variables scoped to their environment.
 
 Protect `main` and `develop` with pull requests, at least one approval, resolved conversations, dismissal of stale approvals, no force pushes/deletions, and the required `Build and test` status check. Require branches to be current before merge. Configure a ruleset if repository administrators must also follow the policy.
+
+## Development runtime
+
+The `dev` deployment runs in `malaysiawest` with these provisioned resources:
+
+| Resource | Name |
+| --- | --- |
+| Resource group | `rg-olga-dev-malaysiawest` |
+| Container registry | `acrolgadevmalaysiaweste` |
+| Container Apps environment | `cae-olga-dev-devmalaysiaweste` |
+| Core API Container App | `ca-olga-core-api-dev` |
+| PostgreSQL Flexible Server | `psql-olga-devmalaysiaweste.postgres.database.azure.com` |
+| PostgreSQL database | `olga_connect_dev` |
+| Key Vault | `kv-olga-devmalaysiaweste` |
+| Runtime managed identity | `id-olga-core-dev` |
+
+The PostgreSQL server has public network access disabled. It uses the delegated subnet `snet-postgresql` and private DNS zone `private.postgres.database.azure.com`. The Container Apps environment uses `snet-container-apps` for VNet integration.
+
+Configure the API container with `ConnectionStrings__PostgreSql` as a Key Vault-backed Container Apps secret reference. The connection must use the server FQDN above, database `olga_connect_dev`, port `5432`, and TLS certificate verification. Configure `ServiceAuthorization__Token` as a separate Key Vault-backed secret; the application refuses to start with PostgreSQL enabled when this setting is absent. Never place either secret value in GitHub variables or workflow YAML.
+
+The runtime managed identity needs permission to pull the image from ACR and read the referenced Key Vault secrets. PostgreSQL schema creation and upgrades must run from a trusted host with network access to the private database endpoint.
 
 ## Runner choice
 
