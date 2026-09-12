@@ -134,3 +134,11 @@ The implemented HTTP projection endpoints are an integration seam for local deve
 ## Delivery status
 
 The implemented slice demonstrates the solution boundary and the highest-risk interaction invariants. It is not yet production complete. The prioritized gaps and acceptance gates are maintained in [Senior architecture review](docs/SENIOR_ARCHITECT_REVIEW.md).
+
+## PostgreSQL v2.4 integration
+
+The code model follows the physical `lower_snake_case` names in the database repository. Profile summary and role category map to `professional_summary` and `role_category`; consent resolves an active `consent_policy` and records its immutable `policy_id`; Live Mode stores the required consent evidence and uses `ACTIVE`, `DISABLED`, and `EXPIRED` lifecycle values.
+
+PostgreSQL deployments execute `social.accept_connection_request`, `chat.save_message`, and `chat.save_message_receipt` through typed Npgsql parameters. Those database-owned functions are the transaction boundary for authorization rechecks, idempotency records, participant creation, sync changes, and outbox events. The in-memory profile retains equivalent application logic for isolated tests only.
+
+Every `/v1` mutation requires a bounded `Idempotency-Key`. Sync pagination exposes the numeric database sequence only as an opaque Base64 cursor. Mutable mapped resources use trigger-generated `row_version` concurrency tokens and API ETags.
