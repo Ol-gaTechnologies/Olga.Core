@@ -39,10 +39,91 @@ Development accepts `X-Member-Id` as a local-only identity substitute and seeds 
 - Preferences and privacy: `PATCH /v1/me/notification-preferences`, `POST /v1/me/privacy-requests`
 - Offline sync: `GET /v1/sync/changes?after={cursor}&limit={n}`
 - NLP boundary: `GET /v1/internal/nlp/eligibility/{contextId}/{memberId}`, `GET /v1/internal/nlp/relationships/{requesterId}/{candidateId}`
-- Operations: `GET /health`, `GET /ready`, `GET /openapi/v1.json`
+- Operations: `GET /health`, `GET /ready`, `GET /openapi/v1.json`, Swagger UI at `/swagger`
 
 ## Developer orientation
 
 Read [Architecture and data flow](ARCHITECTURE.md) before changing domain ownership or adding an endpoint. It explains each project, the main request flows, persistence schemas, cross-API events, and the rules that must remain true.
+
+## Adding a new API endpoint
+
+This project uses ASP.NET Core Minimal APIs rather than controller classes. Add a new API operation through the following layers:
+
+```text
+HTTP route in Olga.Core.Api
+  -> ICoreService/CoreService in Olga.Core.Application
+  -> ICoreStore/CoreDbContext in Olga.Core.Infrastructure
+  -> PostgreSQL
+```
+
+### 1. Define the API contract
+
+Add request and response records to `src/Olga.Core.Contracts/Contracts.cs`. Do not expose domain or EF Core entities directly from an endpoint.
+
+```csharp
+public sealed record MemberSearchResponse(
+    string MemberId,
+    string DisplayName);
+```
+
+### 2. Declare the application operation
+
+Add the method to `ICoreService` in `src/Olga.Core.Application/CoreApplication.cs`:
+
+```csharp
+Task<IReadOnlyList<MemberSearchResponse>> SearchMembersAsync(
+    string searchText,
+    CancellationToken ct);
+```
+
+### 3. Implement the operation
+
+Implement the method in `CoreService`. Keep authorization, validation, and business rules in the application layer rather than in the HTTP route.
+
+```csharp
+public Task<IReadOnlyList<MemberSearchResponse>> SearchMembersAsync(
+    string searchText,
+    CancellationToken ct)
+{
+    ct.ThrowIfCancellationRequested();
+
+    var results = store.Profiles
+        .Where(x => x.Status == "ACTIVE" && x.DisplayName.Contains(searchText))
+        .Select(x => new MemberSearchResponse(x.MemberId, x.DisplayName))
+        .ToList();
+
+    return Task.FromResult<IReadOnlyList<MemberSearchResponse>>(results);
+}
+```
+
+Use `ICoreStore` for normal data access. Add an explicit repository operation when a query or mutation needs database-specific SQL, transactional behavior, or Npgsql parameterization.
+
+### 4. Map the HTTP route
+
+Register the route in `src/Olga.Core.Api/Program.cs`:
+
+```csharp
+app.MapGet(
+    "/v1/members/search",
+    async (string query, ICoreService service, CancellationToken ct) =>
+        Results.Ok(await service.SearchMembersAsync(query, ct)))
+    .WithName("SearchMembers")
+    .WithTags("Members");
+```
+
+All public REST routes must be explicitly versioned under `/v1`. Give each operation a unique name and a meaningful Swagger tag. New routes appear automatically in the Swagger UI at `/swagger`.
+
+For `POST`, `PUT`, `PATCH`, and `DELETE` routes, clients must send an `Idempotency-Key` header. Use `If-Match` with the resource ETag when a mutation can lose concurrent updates. Feeds, chats, and notifications must use opaque cursor pagination.
+
+### 5. Add tests and verify
+
+Add application behavior tests to `tests/Olga.Core.Tests/CoreServiceTests.cs`. Cover the successful result and relevant validation, authorization, idempotency, and concurrency failures.
+
+```powershell
+dotnet test Olga.Core.slnx
+dotnet run --project src/Olga.Core.Api
+```
+
+After starting the API, browse to `/swagger` to inspect and exercise the new endpoint.
 
 The pull-request and environment deployment process is documented in [CI/CD operations](docs/CI_CD.md).

@@ -50,6 +50,11 @@ app.Use(async (context, next) =>
 });
 
 app.MapOpenApi();
+app.UseSwaggerUI(options =>
+{
+    options.RoutePrefix = "swagger";
+    options.SwaggerEndpoint("/openapi/v1.json", "OLGA Connect Core API v1");
+});
 app.MapHealthChecks("/health");
 app.MapGet("/ready", async (CoreDbContext db, CancellationToken ct) => await db.Database.CanConnectAsync(ct) ? Results.Ok(new { status = "ready" }) : Results.StatusCode(503));
 
