@@ -38,7 +38,7 @@ Development accepts `X-Member-Id` as a local-only identity substitute and seeds 
 - Chat: `GET/POST /v1/conversations/{id}/messages`
 - Preferences and privacy: `PATCH /v1/me/notification-preferences`, `POST /v1/me/privacy-requests`
 - Offline sync: `GET /v1/sync/changes?after={cursor}&limit={n}`
-- Operations: `GET /health`, `GET /ready`, `GET /openapi/v1.json`, Swagger UI at `/swagger`
+- Operations: `GET /health`, `GET /ready`, `GET /swagger/v1/swagger.json`, Swagger UI at `/swagger`
 
 ## Developer orientation
 

@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.OpenApi;
 using Npgsql;
 using Olga.Core.Api;
 using Olga.Core.Application;
@@ -11,7 +12,15 @@ using Olga.Core.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.ConfigureHttpJsonOptions(o => { o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower; o.SerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull; });
-builder.Services.AddOpenApi();
+builder.Services.AddOpenApi(options =>
+{
+    options.AddDocumentTransformer((document, _, _) =>
+    {
+        // Resolve API calls against the origin that served Swagger, never Kestrel's internal HTTP endpoint.
+        document.Servers = [new OpenApiServer { Url = "/" }];
+        return Task.CompletedTask;
+    });
+});
 builder.Services.AddHealthChecks();
 var connection = builder.Configuration.GetConnectionString("PostgreSql");
 var local = string.IsNullOrWhiteSpace(connection);
@@ -48,11 +57,11 @@ app.Use(async (context, next) =>
     catch (Exception) { await Error(context, 500, "INTERNAL_ERROR"); }
 });
 
-app.MapOpenApi();
+app.MapOpenApi("/swagger/{documentName}/swagger.json");
 app.UseSwaggerUI(options =>
 {
     options.RoutePrefix = "swagger";
-    options.SwaggerEndpoint("../openapi/v1.json", "OLGA Connect Core API v1");
+    options.SwaggerEndpoint("/swagger/v1/swagger.json", "OLGA Core API v1");
 });
 app.MapHealthChecks("/health");
 app.MapGet("/ready", async (CoreDbContext db, CancellationToken ct) => await db.Database.CanConnectAsync(ct) ? Results.Ok(new { status = "ready" }) : Results.StatusCode(503));
