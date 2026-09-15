@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
+using Olga.Core.Api;
 using Olga.Core.Application;
 using Olga.Core.Contracts;
 using Olga.Core.Domain;
@@ -20,6 +21,7 @@ builder.Services.AddScoped<ICoreStore>(sp => sp.GetRequiredService<CoreDbContext
 builder.Services.AddScoped<ICoreService, CoreService>();
 
 var app = builder.Build();
+if (app.Environment.IsProduction()) app.UseMiddleware<AzureIngressHstsMiddleware>();
 app.Use(async (context, next) =>
 {
     context.Response.Headers["X-Correlation-Id"] = context.TraceIdentifier;
@@ -50,7 +52,7 @@ app.MapOpenApi();
 app.UseSwaggerUI(options =>
 {
     options.RoutePrefix = "swagger";
-    options.SwaggerEndpoint("/openapi/v1.json", "OLGA Connect Core API v1");
+    options.SwaggerEndpoint("../openapi/v1.json", "OLGA Connect Core API v1");
 });
 app.MapHealthChecks("/health");
 app.MapGet("/ready", async (CoreDbContext db, CancellationToken ct) => await db.Database.CanConnectAsync(ct) ? Results.Ok(new { status = "ready" }) : Results.StatusCode(503));

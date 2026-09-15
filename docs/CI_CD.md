@@ -58,7 +58,7 @@ Configure the API container with `ConnectionStrings__PostgreSql` as a Key Vault-
 
 The current registry uses the non-ABAC permission model. Grant the GitHub deployment identity `AcrPush` on `acrolgadevmalaysiaweste`, and grant the runtime managed identity only `AcrPull` on that registry. The runtime identity also needs permission to read the referenced Key Vault secrets. PostgreSQL schema creation and upgrades must run from a trusted host with network access to the private database endpoint.
 
-The API image listens on port `8080`. Configure Container Apps ingress and probes for that target port. Use `/health` as the process liveness endpoint and `/ready` as the readiness endpoint; `/ready` verifies PostgreSQL connectivity. Published images use the immutable commit tag `acrolgadevmalaysiaweste.azurecr.io/olga-core-api:<commit-sha>`, and deployment resolves that image to its digest.
+The API image listens internally over HTTP on port `8080`; TLS terminates at Azure Container Apps ingress. The deployment workflow enforces target port `8080` and `allowInsecure=false` for both `dev` and `prd`, so ingress redirects public HTTP requests to HTTPS. The application does not perform HTTPS redirection or broadly trust forwarded headers, avoiding proxy redirect loops. Production responses include HSTS, and Swagger uses a relative OpenAPI URL so browser requests inherit HTTPS. Use `/health` as the process liveness endpoint and `/ready` as the readiness endpoint; `/ready` verifies PostgreSQL connectivity. Published images use the immutable commit tag `acrolgadevmalaysiaweste.azurecr.io/olga-core-api:<commit-sha>`, and deployment resolves that image to its digest.
 
 ## Runner choice
 
