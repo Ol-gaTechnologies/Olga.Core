@@ -32,9 +32,6 @@ public interface ICoreStore
     Task<MessageReceipt> SaveMessageReceiptAsync(string memberId, string messageId, MessageReceiptRequest request, string idempotencyKey, string requestHash, CancellationToken ct);
 }
 
-public sealed record NlpEligibilityProjection(string MemberId, string ContextId, bool Eligible, string ReasonCode);
-public sealed record NlpRelationshipProjection(string RequesterId, string CandidateId, bool Connected, bool Blocked);
-
 public interface ICoreService
 {
     Task<ProfileResponse> GetOwnProfileAsync(string memberId, CancellationToken ct);
@@ -56,8 +53,6 @@ public interface ICoreService
     Task<NotificationPreferenceResponse> SetNotificationPreferenceAsync(string memberId, NotificationPreferenceRequest request, CancellationToken ct);
     Task<PrivacyRequestResponse> CreatePrivacyRequestAsync(string memberId, PrivacyRequestCreate request, CancellationToken ct);
     Task<SyncResponse> GetChangesAsync(string memberId, long after, int limit, CancellationToken ct);
-    Task<NlpEligibilityProjection> GetNlpEligibilityAsync(string memberId, string contextId, CancellationToken ct);
-    Task<NlpRelationshipProjection> GetNlpRelationshipAsync(string requesterId, string candidateId, CancellationToken ct);
 }
 
 public sealed class CoreService(ICoreStore store) : ICoreService
@@ -335,23 +330,6 @@ public sealed class CoreService(ICoreStore store) : ICoreService
         var hasMore = rows.Length > bounded;
         var page = rows.Take(bounded).Select(x => new SyncItem(x.SyncSequence, x.ResourceType, x.ResourceId, x.ChangeType, x.ResourceVersion, x.PayloadJson is null ? null : JsonSerializer.Deserialize<object>(x.PayloadJson, JsonOptions), x.OccurredAt)).ToArray();
         return Task.FromResult(new SyncResponse(page, page.Length == 0 ? null : EncodeCursor(page[^1].Sequence), hasMore));
-    }
-
-    public Task<NlpEligibilityProjection> GetNlpEligibilityAsync(string memberId, string contextId, CancellationToken ct)
-    {
-        ct.ThrowIfCancellationRequested();
-        var profile = store.Profiles.SingleOrDefault(x => x.MemberId == memberId);
-        if (profile is null || profile.Status != "ACTIVE") return Task.FromResult(new NlpEligibilityProjection(memberId, contextId, false, "MEMBER_INACTIVE"));
-        if (!store.Registrations.Any(x => x.MemberId == memberId && x.EventId == contextId && (x.Status == "REGISTERED" || x.Status == "CHECKED_IN"))) return Task.FromResult(new NlpEligibilityProjection(memberId, contextId, false, "NOT_REGISTERED"));
-        if (!HasConsent(memberId, "MATCHING")) return Task.FromResult(new NlpEligibilityProjection(memberId, contextId, false, "CONSENT_REQUIRED"));
-        if (!store.LiveSessions.Any(x => x.MemberId == memberId && x.EventId == contextId && x.Status == "ACTIVE" && x.ActiveUntil > DateTimeOffset.UtcNow)) return Task.FromResult(new NlpEligibilityProjection(memberId, contextId, false, "LIVE_MODE_INACTIVE"));
-        return Task.FromResult(new NlpEligibilityProjection(memberId, contextId, true, "ELIGIBLE"));
-    }
-
-    public Task<NlpRelationshipProjection> GetNlpRelationshipAsync(string requesterId, string candidateId, CancellationToken ct)
-    {
-        ct.ThrowIfCancellationRequested();
-        return Task.FromResult(new NlpRelationshipProjection(requesterId, candidateId, IsConnected(requesterId, candidateId), IsBlocked(requesterId, candidateId)));
     }
 
     private MemberProfile FindProfile(string id) => store.Profiles.SingleOrDefault(x => x.MemberId == id && x.Status == "ACTIVE") ?? throw new DomainException("PROFILE_NOT_FOUND", 404);

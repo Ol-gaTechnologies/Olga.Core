@@ -54,7 +54,7 @@ The `dev` deployment runs in `malaysiawest` with these provisioned resources:
 
 The PostgreSQL server has public network access disabled. It uses the delegated subnet `snet-postgresql` and private DNS zone `private.postgres.database.azure.com`. The Container Apps environment uses `snet-container-apps` for VNet integration.
 
-Configure the API container with `ConnectionStrings__PostgreSql` as a Key Vault-backed Container Apps secret reference. The connection must use the server FQDN above, database `olga_connect_dev`, port `5432`, and TLS certificate verification. Configure `ServiceAuthorization__Token` as a separate Key Vault-backed secret; the application refuses to start with PostgreSQL enabled when this setting is absent. Never place either secret value in GitHub variables or workflow YAML.
+Configure the API container with `ConnectionStrings__PostgreSql` as a Key Vault-backed Container Apps secret reference. The connection must use the server FQDN above, database `olga_connect_dev`, port `5432`, and TLS certificate verification. Never place the secret value in GitHub variables or workflow YAML.
 
 The current registry uses the non-ABAC permission model. Grant the GitHub deployment identity `AcrPush` on `acrolgadevmalaysiaweste`, and grant the runtime managed identity only `AcrPull` on that registry. The runtime identity also needs permission to read the referenced Key Vault secrets. PostgreSQL schema creation and upgrades must run from a trusted host with network access to the private database endpoint.
 

@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -21,8 +20,6 @@ builder.Services.AddScoped<ICoreStore>(sp => sp.GetRequiredService<CoreDbContext
 builder.Services.AddScoped<ICoreService, CoreService>();
 
 var app = builder.Build();
-var serviceToken = app.Configuration["ServiceAuthorization:Token"];
-if (!local && string.IsNullOrWhiteSpace(serviceToken)) throw new InvalidOperationException("ServiceAuthorization:Token is required when PostgreSQL is configured.");
 app.Use(async (context, next) =>
 {
     context.Response.Headers["X-Correlation-Id"] = context.TraceIdentifier;
@@ -78,9 +75,6 @@ app.MapPatch("/v1/me/notification-preferences", async (HttpContext c, Notificati
 app.MapPost("/v1/me/privacy-requests", async (HttpContext c, PrivacyRequestCreate body, ICoreService s, CancellationToken ct) => Results.Accepted("/v1/me/privacy-requests", await s.CreatePrivacyRequestAsync(Member(c, app), body, ct)));
 app.MapGet("/v1/sync/changes", async (HttpContext c, string? cursor, int? limit, ICoreService s, CancellationToken ct) => Results.Ok(await s.GetChangesAsync(Member(c, app), DecodeCursor(cursor), limit ?? 100, ct)));
 
-app.MapGet("/v1/internal/nlp/eligibility/{contextId}/{memberId}", async (HttpContext c, string contextId, string memberId, ICoreService s, CancellationToken ct) => { RequireService(c, serviceToken, app.Environment); return Results.Ok(await s.GetNlpEligibilityAsync(memberId, contextId, ct)); });
-app.MapGet("/v1/internal/nlp/relationships/{requesterId}/{candidateId}", async (HttpContext c, string requesterId, string candidateId, ICoreService s, CancellationToken ct) => { RequireService(c, serviceToken, app.Environment); return Results.Ok(await s.GetNlpRelationshipAsync(requesterId, candidateId, ct)); });
-
 if (local) await LocalDevelopmentSeeder.SeedAsync(app.Services, CancellationToken.None);
 app.Run();
 
@@ -92,19 +86,6 @@ static string Member(HttpContext context, WebApplication app)
 }
 
 static string Idempotency(HttpContext context) => context.Request.Headers["Idempotency-Key"].ToString();
-
-static void RequireService(HttpContext context, string? expected, IWebHostEnvironment environment)
-{
-    if (environment.IsDevelopment() && string.IsNullOrWhiteSpace(expected)) return;
-    var supplied = context.Request.Headers["X-Service-Token"].ToString();
-    if (string.IsNullOrWhiteSpace(expected) || !FixedEquals(supplied, expected)) throw new DomainException("SERVICE_IDENTITY_REQUIRED", 401);
-}
-
-static bool FixedEquals(string supplied, string expected)
-{
-    var left = Encoding.UTF8.GetBytes(supplied); var right = Encoding.UTF8.GetBytes(expected);
-    return left.Length == right.Length && CryptographicOperations.FixedTimeEquals(left, right);
-}
 
 static long DecodeCursor(string? cursor)
 {

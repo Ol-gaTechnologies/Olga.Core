@@ -13,7 +13,7 @@ The repository is independent from `Olga.Nlp` and can be versioned, built, teste
 - Idempotent client message IDs and server message ordering.
 - Notification preferences, privacy-request initiation, and authorization-filtered sync changes.
 - Transactional outbox records for cross-domain and NLP-related integration events.
-- Read-only internal NLP eligibility and relationship projections. Core remains the authority; NLP cannot change or bypass these decisions.
+- Transactional integration events that allow NLP to refresh its read-only eligibility projections without proxying NLP requests through Core.
 - EF Core InMemory local development and PostgreSQL configuration through `ConnectionStrings__PostgreSql`.
 
 ## What is intentionally not implemented yet
@@ -38,7 +38,6 @@ Development accepts `X-Member-Id` as a local-only identity substitute and seeds 
 - Chat: `GET/POST /v1/conversations/{id}/messages`
 - Preferences and privacy: `PATCH /v1/me/notification-preferences`, `POST /v1/me/privacy-requests`
 - Offline sync: `GET /v1/sync/changes?after={cursor}&limit={n}`
-- NLP boundary: `GET /v1/internal/nlp/eligibility/{contextId}/{memberId}`, `GET /v1/internal/nlp/relationships/{requesterId}/{candidateId}`
 - Operations: `GET /health`, `GET /ready`, `GET /openapi/v1.json`, Swagger UI at `/swagger`
 
 ## Developer orientation

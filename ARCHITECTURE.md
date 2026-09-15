@@ -109,22 +109,20 @@ Core business mutation
   -> transport publisher
   -> NLP refreshes/re-queries approved eligibility projections
 
-NLP match request
-  -> NLP obtains bounded eligible members and pair relationships
-  -> Core projection reports eligible/connected/blocked state
+Client match request -> directly exposed NLP API
+  -> NLP obtains bounded eligible members and pair relationships from approved read-only views
   -> NLP filters before ranking
   -> NLP ranks and persists results in nlp schema
   -> NlpMatchRequestCompleted.v1
   -> Core notification/sync workers create product-visible outcomes
 ```
 
-The implemented HTTP projection endpoints are an integration seam for local development. The target PostgreSQL design may replace them with least-privilege read-only views (`nlp.vw_member_context_eligibility` and `nlp.vw_member_relationship`) or retain service calls. Choose one production path and load-test it; do not run both as competing authorities.
+Core does not proxy client requests to NLP and does not expose internal NLP projection endpoints. Clients call the NLP API directly through the approved API gateway. NLP reads eligibility and relationship state from the least-privilege, read-only views `nlp.vw_member_context_eligibility` and `nlp.vw_member_relationship`. Core remains authoritative for consent, event participation, connections, and blocks.
 
 ## Security invariants
 
 - No client connects directly to Azure Database for PostgreSQL, Blob Storage, or messaging infrastructure.
 - Member identity comes from a validated token subject; `X-Member-Id` exists only for local development.
-- The internal NLP projection endpoints require a service identity outside Development.
 - Consent and authorization fail closed.
 - Presence is coarse, short-lived, and never exposed to another member.
 - Chat authorization is re-evaluated on every read and send.

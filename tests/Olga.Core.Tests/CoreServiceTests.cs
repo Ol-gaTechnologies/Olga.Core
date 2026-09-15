@@ -54,8 +54,8 @@ public sealed class CoreServiceTests
         var request = await service.CreateConnectionRequestAsync("A", new("B"), default);
         var accepted = await service.DecideConnectionRequestAsync("B", request.RequestId, new("ACCEPT"), "accept-2", default);
         await service.BlockAsync("A", new("B"), default);
-        var projection = await service.GetNlpRelationshipAsync("A", "B", default);
-        Assert.True(projection.Blocked); Assert.False(projection.Connected);
+        Assert.Equal("DISCONNECTED", db.SocialConnections.Single().Status);
+        Assert.Contains(db.MemberBlocks, x => x.BlockerMemberId == "A" && x.BlockedMemberId == "B" && x.RemovedAt == null);
         await Assert.ThrowsAsync<DomainException>(() => service.SendMessageAsync("B", accepted.ConversationId, new("m2", "No"), "message-2", default));
     }
 
