@@ -85,8 +85,6 @@ public sealed class AuthenticationContractTests
                     JwtBearerDefaults.AuthenticationScheme,
                     options =>
                     {
-                        options.Authority = null;
-                        options.MetadataAddress = null;
                         options.TokenValidationParameters = new TokenValidationParameters
                         {
                             ValidateIssuer = true,
