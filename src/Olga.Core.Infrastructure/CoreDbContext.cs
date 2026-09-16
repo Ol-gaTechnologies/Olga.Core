@@ -165,19 +165,29 @@ public sealed class CoreDbContext(DbContextOptions<CoreDbContext> options) : DbC
 
 public static class LocalDevelopmentSeeder
 {
+    private static readonly SemaphoreSlim Gate = new(1, 1);
+
     public static async Task SeedAsync(IServiceProvider services, CancellationToken ct)
     {
-        await using var scope = services.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<CoreDbContext>();
-        if (db.MemberProfiles.Any()) return;
-        db.MemberProfiles.AddRange(
-            new MemberProfile { MemberId = "A123", DisplayName = "Asha Rao", Headline = "Pharmaceutical founder", Sector = "pharmaceutical", Status = "ACTIVE" },
-            new MemberProfile { MemberId = "B456", DisplayName = "Ben Lim", Headline = "Cold-chain operator", Sector = "logistics", Status = "ACTIVE" },
-            new MemberProfile { MemberId = "D111", DisplayName = "Dana Lee", Headline = "Distribution advisor", Sector = "distribution", Status = "ACTIVE" });
-        db.ConsentPolicies.AddRange(
-            new ConsentPolicy { PolicyId = "live-mode-v1", PurposeCode = "LIVE_MODE", Version = "1", ContentHash = new string('0', 64), EffectiveFrom = DateTimeOffset.UtcNow.AddYears(-1) },
-            new ConsentPolicy { PolicyId = "matching-v1", PurposeCode = "MATCHING", Version = "1", ContentHash = new string('1', 64), EffectiveFrom = DateTimeOffset.UtcNow.AddYears(-1) });
-        db.EventRecords.Add(new EventRecord { EventId = "event-001", Name = "OLGA Connect Pilot", StartsAt = DateTimeOffset.UtcNow.AddDays(-1), EndsAt = DateTimeOffset.UtcNow.AddDays(30), LiveModeEnabled = true });
-        await db.SaveChangesAsync(ct);
+        await Gate.WaitAsync(ct);
+        try
+        {
+            await using var scope = services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<CoreDbContext>();
+            if (await db.MemberProfiles.AnyAsync(ct)) return;
+            db.MemberProfiles.AddRange(
+                new MemberProfile { MemberId = "A123", DisplayName = "Asha Rao", Headline = "Pharmaceutical founder", Sector = "pharmaceutical", Status = "ACTIVE" },
+                new MemberProfile { MemberId = "B456", DisplayName = "Ben Lim", Headline = "Cold-chain operator", Sector = "logistics", Status = "ACTIVE" },
+                new MemberProfile { MemberId = "D111", DisplayName = "Dana Lee", Headline = "Distribution advisor", Sector = "distribution", Status = "ACTIVE" });
+            db.ConsentPolicies.AddRange(
+                new ConsentPolicy { PolicyId = "live-mode-v1", PurposeCode = "LIVE_MODE", Version = "1", ContentHash = new string('0', 64), EffectiveFrom = DateTimeOffset.UtcNow.AddYears(-1) },
+                new ConsentPolicy { PolicyId = "matching-v1", PurposeCode = "MATCHING", Version = "1", ContentHash = new string('1', 64), EffectiveFrom = DateTimeOffset.UtcNow.AddYears(-1) });
+            db.EventRecords.Add(new EventRecord { EventId = "event-001", Name = "OLGA Connect Pilot", StartsAt = DateTimeOffset.UtcNow.AddDays(-1), EndsAt = DateTimeOffset.UtcNow.AddDays(30), LiveModeEnabled = true });
+            await db.SaveChangesAsync(ct);
+        }
+        finally
+        {
+            Gate.Release();
+        }
     }
 }

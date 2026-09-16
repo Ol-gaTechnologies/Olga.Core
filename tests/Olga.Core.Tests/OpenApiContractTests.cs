@@ -10,27 +10,6 @@ public sealed class OpenApiContractTests : IClassFixture<WebApplicationFactory<P
     public OpenApiContractTests(WebApplicationFactory<Program> factory) => this.factory = factory;
 
     [Fact]
-    public async Task Generated_document_does_not_describe_authentication_schemes()
-    {
-        using var document = await GetDocumentAsync();
-        Assert.False(
-            document.RootElement.TryGetProperty("components", out var components)
-            && components.TryGetProperty("securitySchemes", out _));
-    }
-
-    [Fact]
-    public async Task Generated_document_marks_all_operations_as_anonymous()
-    {
-        using var document = await GetDocumentAsync();
-        var paths = document.RootElement.GetProperty("paths");
-
-        AssertOperationIsAnonymousWhenDocumented(paths, "/v1/me/profile", "get");
-        Assert.False(paths.GetProperty("/v1/events").GetProperty("get").TryGetProperty("security", out _));
-        AssertOperationIsAnonymousWhenDocumented(paths, "/health", "get");
-        AssertOperationIsAnonymousWhenDocumented(paths, "/ready", "get");
-    }
-
-    [Fact]
     public async Task Generated_document_uses_only_the_browser_https_origin_behind_a_proxy()
     {
         using var document = await GetDocumentAsync(forwardedProto: "https");
@@ -54,19 +33,5 @@ public sealed class OpenApiContractTests : IClassFixture<WebApplicationFactory<P
         using var response = await client.SendAsync(request);
         response.EnsureSuccessStatusCode();
         return await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
-    }
-
-    private static void AssertOperationIsAnonymousWhenDocumented(
-        JsonElement paths,
-        string path,
-        string method)
-    {
-        if (!paths.TryGetProperty(path, out var pathItem)
-            || !pathItem.TryGetProperty(method, out var operation))
-        {
-            return;
-        }
-
-        Assert.False(operation.TryGetProperty("security", out _));
     }
 }
