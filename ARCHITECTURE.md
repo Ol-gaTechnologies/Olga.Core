@@ -123,6 +123,7 @@ Core does not proxy client requests to NLP and does not expose internal NLP proj
 
 - No client connects directly to Azure Database for PostgreSQL, Blob Storage, or messaging infrastructure.
 - During the initial MVP, member context comes from optional `X-Member-Id` and otherwise uses `Mvp__DefaultMemberId`; it is not an authenticated identity.
+- Resolving member context for a member-scoped endpoint idempotently provisions a private `DRAFT` profile when none exists. PostgreSQL uses `ON CONFLICT DO NOTHING` so concurrent first requests converge on one row. Drafts cannot be discovered or initiate connections. Existing lifecycle states are never overwritten or reactivated by profile updates, and only profile completion promotes a draft to `ACTIVE`.
 - Consent and authorization fail closed.
 - Presence is coarse, short-lived, and never exposed to another member.
 - Chat authorization is re-evaluated on every read and send.

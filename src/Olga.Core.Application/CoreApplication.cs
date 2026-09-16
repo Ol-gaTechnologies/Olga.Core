@@ -24,6 +24,7 @@ public interface ICoreStore
     IQueryable<NotificationPreference> NotificationPreferences { get; }
     IQueryable<PrivacyRequest> PrivacyRequests { get; }
     IQueryable<SyncChange> SyncChanges { get; }
+    Task EnsureMemberAsync(string memberId, CancellationToken ct);
     void Add<T>(T entity) where T : class;
     void Remove<T>(T entity) where T : class;
     Task SaveAsync(CancellationToken ct);
@@ -34,6 +35,7 @@ public interface ICoreStore
 
 public interface ICoreService
 {
+    Task ProvisionMemberAsync(string memberId, CancellationToken ct);
     Task<ProfileResponse> GetOwnProfileAsync(string memberId, CancellationToken ct);
     Task<ProfileResponse> GetVisibleProfileAsync(string actorId, string memberId, CancellationToken ct);
     Task<ProfileResponse> UpdateProfileAsync(string memberId, ProfileUpdateRequest request, string? ifMatch, CancellationToken ct);
@@ -59,10 +61,17 @@ public sealed class CoreService(ICoreStore store) : ICoreService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
 
+    public Task ProvisionMemberAsync(string memberId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(memberId) || memberId.Length > 64) throw new DomainException("MEMBER_ID_INVALID");
+        return store.EnsureMemberAsync(memberId, ct);
+    }
+
     public Task<ProfileResponse> GetOwnProfileAsync(string memberId, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        return Task.FromResult(Map(FindProfile(memberId)));
+        var profile = store.Profiles.SingleOrDefault(x => x.MemberId == memberId) ?? throw new DomainException("PROFILE_NOT_FOUND", 404);
+        return Task.FromResult(Map(profile));
     }
 
     public Task<ProfileResponse> GetVisibleProfileAsync(string actorId, string memberId, CancellationToken ct)
@@ -87,8 +96,10 @@ public sealed class CoreService(ICoreStore store) : ICoreService
         }
         else
         {
-            if (string.IsNullOrWhiteSpace(ifMatch)) throw new DomainException("IF_MATCH_REQUIRED", 428);
-            if (!string.Equals(ifMatch.Trim('"'), profile.Version.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal))
+            if (profile.Status is not ("DRAFT" or "ACTIVE")) throw new DomainException("PROFILE_NOT_EDITABLE", 409);
+            var isInitialDraft = profile.Status == "DRAFT" && profile.PublishedAt is null && string.IsNullOrWhiteSpace(profile.DisplayName);
+            if (string.IsNullOrWhiteSpace(ifMatch) && !isInitialDraft) throw new DomainException("IF_MATCH_REQUIRED", 428);
+            if (!string.IsNullOrWhiteSpace(ifMatch) && !string.Equals(ifMatch.Trim('"'), profile.Version.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal))
                 throw new DomainException("RESOURCE_VERSION_CONFLICT", 409);
             if (!store.IsRelational) profile.Version++;
         }
@@ -187,6 +198,7 @@ public sealed class CoreService(ICoreStore store) : ICoreService
     public async Task<ConnectionRequestResponse> CreateConnectionRequestAsync(string senderId, ConnectionRequestCreate request, CancellationToken ct)
     {
         if (senderId == request.RecipientMemberId) throw new DomainException("SELF_CONNECTION_INVALID");
+        _ = FindProfile(senderId);
         _ = FindProfile(request.RecipientMemberId);
         if (IsBlocked(senderId, request.RecipientMemberId)) throw new DomainException("CONNECTION_NOT_ALLOWED", 403);
         if (IsConnected(senderId, request.RecipientMemberId)) throw new DomainException("CONNECTION_EXISTS", 409);

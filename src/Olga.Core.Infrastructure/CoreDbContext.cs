@@ -54,6 +54,30 @@ public sealed class CoreDbContext(DbContextOptions<CoreDbContext> options) : DbC
     void ICoreStore.Remove<T>(T entity) => Set<T>().Remove(entity);
     Task ICoreStore.SaveAsync(CancellationToken ct) => SaveChangesAsync(ct);
 
+    async Task ICoreStore.EnsureMemberAsync(string memberId, CancellationToken ct)
+    {
+        if (!Database.IsRelational())
+        {
+            if (await MemberProfiles.AnyAsync(x => x.MemberId == memberId, ct)) return;
+            MemberProfiles.Add(new MemberProfile { MemberId = memberId, Status = "DRAFT", Visibility = "HIDDEN" });
+            await SaveChangesAsync(ct);
+            return;
+        }
+
+        await using var command = CreateCommand("""
+            INSERT INTO core.member_profile
+                (member_id, display_name, profile_status, visibility, completeness_score, row_version, created_at, updated_at)
+            VALUES
+                (@member_id, '', 'DRAFT', 'HIDDEN', 0, 1, @created_at, @created_at)
+            ON CONFLICT (member_id) DO NOTHING
+            """);
+        AddVarchar(command, "member_id", memberId, 64);
+        AddTimestamp(command, "created_at", DateTimeOffset.UtcNow);
+        var close = await OpenIfNeededAsync(ct);
+        try { await command.ExecuteNonQueryAsync(ct); }
+        finally { if (close) await Database.CloseConnectionAsync(); }
+    }
+
     async Task<(string ConnectionId, string ConversationId)> ICoreStore.AcceptConnectionRequestAsync(string requestId, string recipientId, string connectionId, string conversationId, string idempotencyKey, string requestHash, CancellationToken ct)
     {
         await using var command = CreateCommand("SELECT * FROM social.accept_connection_request(@request_id, @recipient_id, @connection_id, @conversation_id, @idempotency_key, @request_hash, @idempotency_expires_at, @sync_expires_at)");

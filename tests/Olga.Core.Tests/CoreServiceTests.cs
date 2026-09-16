@@ -9,6 +9,80 @@ namespace Olga.Core.Tests;
 public sealed class CoreServiceTests
 {
     [Fact]
+    public async Task First_member_request_provisions_private_draft_idempotently()
+    {
+        await using var db = Db();
+        var service = Service(db);
+
+        await service.ProvisionMemberAsync("NEW", default);
+        await service.ProvisionMemberAsync("NEW", default);
+
+        var profile = await service.GetOwnProfileAsync("NEW", default);
+        Assert.Equal("DRAFT", profile.ProfileStatus);
+        Assert.Equal("HIDDEN", profile.Visibility);
+        Assert.Equal("", profile.DisplayName);
+        Assert.Single(db.MemberProfiles);
+    }
+
+    [Fact]
+    public async Task Initial_draft_can_be_completed_without_an_etag()
+    {
+        await using var db = Db();
+        var service = Service(db);
+        await service.ProvisionMemberAsync("NEW", default);
+
+        var profile = await service.UpdateProfileAsync("NEW", new("New member", null, null, null), null, default);
+
+        Assert.Equal("ACTIVE", profile.ProfileStatus);
+        Assert.Equal("New member", profile.DisplayName);
+    }
+
+    [Fact]
+    public async Task Draft_member_is_not_visible_to_other_members()
+    {
+        await using var db = Db();
+        var service = Service(db);
+        await service.ProvisionMemberAsync("NEW", default);
+
+        var error = await Assert.ThrowsAsync<DomainException>(() => service.GetVisibleProfileAsync("A", "NEW", default));
+
+        Assert.Equal("PROFILE_NOT_FOUND", error.Code);
+    }
+
+    [Theory]
+    [InlineData("SUSPENDED")]
+    [InlineData("ANONYMIZED")]
+    [InlineData("DELETED")]
+    public async Task Provisioning_does_not_reactivate_an_existing_member(string status)
+    {
+        await using var db = Db();
+        db.MemberProfiles.Add(new MemberProfile { MemberId = "S", DisplayName = "Existing", Status = status, Visibility = "HIDDEN" });
+        await db.SaveChangesAsync();
+        var service = Service(db);
+
+        await service.ProvisionMemberAsync("S", default);
+
+        Assert.Equal(status, db.MemberProfiles.Single().Status);
+        Assert.Single(db.MemberProfiles);
+        var error = await Assert.ThrowsAsync<DomainException>(() => service.UpdateProfileAsync("S", new("Reactivate", null, null, null), "\"1\"", default));
+        Assert.Equal("PROFILE_NOT_EDITABLE", error.Code);
+    }
+
+    [Fact]
+    public async Task Draft_member_cannot_create_a_connection_request()
+    {
+        await using var db = Db();
+        db.MemberProfiles.Add(new MemberProfile { MemberId = "A", DisplayName = "A", Status = "ACTIVE" });
+        await db.SaveChangesAsync();
+        var service = Service(db);
+        await service.ProvisionMemberAsync("NEW", default);
+
+        var error = await Assert.ThrowsAsync<DomainException>(() => service.CreateConnectionRequestAsync("NEW", new("A"), default));
+
+        Assert.Equal("PROFILE_NOT_FOUND", error.Code);
+    }
+
+    [Fact]
     public async Task Profile_update_requires_matching_etag()
     {
         await using var db = Db();

@@ -31,6 +31,8 @@ dotnet run --project src/Olga.Core.Api
 
 All endpoints are anonymous for the initial MVP. Member-scoped endpoints use the optional `X-Member-Id` header to select a member and otherwise fall back to `Mvp__DefaultMemberId` (`A123` by default). Local development seeds members `A123`, `B456`, `D111` plus `event-001`. Do not treat this member selector as authentication; restore a verified identity provider before exposing member data beyond the MVP environment.
 
+The first request to any member-scoped endpoint idempotently provisions a private `DRAFT` member profile. Concurrent first requests are safe on PostgreSQL. `GET /v1/me/profile` returns the draft for onboarding, and the first profile update activates it. Draft profiles are neither visible through member lookup nor eligible to initiate connections. Provisioning and profile updates never reactivate an existing suspended, anonymized, or deleted profile. The public `GET /v1/events` endpoint does not provision a member.
+
 ## Endpoint groups
 
 - Profile and consent: `GET/PATCH /v1/me/profile`, `GET /v1/members/{memberId}`, `POST /v1/me/consents`
