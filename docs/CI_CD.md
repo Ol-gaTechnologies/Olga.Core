@@ -59,11 +59,9 @@ Configure the API container with the following exact environment-variable names:
 | Name | Secret | Purpose |
 | --- | --- | --- |
 | `ConnectionStrings__PostgreSql` | Yes; use a Key Vault-backed Container Apps secret reference | PostgreSQL connection string using the server FQDN, database `olga_connect_dev`, port `5432`, and TLS certificate verification |
-| `Identity__Authority` | No | HTTPS OIDC issuer/authority used to obtain signing metadata |
-| `Identity__Audience` | No | Audience required in end-user access tokens for the Core API |
-| `Identity__AllowLocalMemberHeader` | No | Must be `false` for deployed environments; the local header handler is never registered outside Development |
+| `Mvp__DefaultMemberId` | No | Member used by anonymous MVP requests that omit `X-Member-Id`; defaults to `A123` |
 
-The API does not require an identity-provider client secret to validate JWTs and does not support a static internal service credential. Never place token values or the database secret value in GitHub variables, workflow YAML, application settings, logs, or OpenAPI documents. The application fails startup outside Development when `Identity__Authority` or `Identity__Audience` is absent.
+The initial MVP API does not validate caller identity. Requests may select any member with `X-Member-Id`, so this deployment must not be treated as suitable for public or sensitive member data. Restore OIDC/JWT validation before expanding access beyond the controlled MVP environment. Never place the database secret value in GitHub variables, workflow YAML, application settings, logs, or OpenAPI documents.
 
 The current registry uses the non-ABAC permission model. Grant the GitHub deployment identity `AcrPush` on `acrolgadevmalaysiaweste`, and grant the runtime managed identity only `AcrPull` on that registry. The runtime identity also needs permission to read the referenced Key Vault secrets. PostgreSQL schema creation and upgrades must run from a trusted host with network access to the private database endpoint.
 

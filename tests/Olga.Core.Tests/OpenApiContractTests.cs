@@ -10,42 +10,21 @@ public sealed class OpenApiContractTests : IClassFixture<WebApplicationFactory<P
     public OpenApiContractTests(WebApplicationFactory<Program> factory) => this.factory = factory;
 
     [Fact]
-    public async Task Generated_document_describes_the_supported_authentication_schemes()
+    public async Task Generated_document_does_not_describe_authentication_schemes()
     {
         using var document = await GetDocumentAsync();
-        var schemes = document.RootElement.GetProperty("components").GetProperty("securitySchemes");
-
-        var bearer = schemes.GetProperty("Bearer");
-        Assert.Equal("http", bearer.GetProperty("type").GetString());
-        Assert.Equal("bearer", bearer.GetProperty("scheme").GetString());
-        Assert.Equal("JWT", bearer.GetProperty("bearerFormat").GetString());
-
-        var localMember = schemes.GetProperty("LocalMember");
-        Assert.Equal("apiKey", localMember.GetProperty("type").GetString());
-        Assert.Equal("X-Member-Id", localMember.GetProperty("name").GetString());
-        Assert.Equal("header", localMember.GetProperty("in").GetString());
+        Assert.False(
+            document.RootElement.TryGetProperty("components", out var components)
+            && components.TryGetProperty("securitySchemes", out _));
     }
 
     [Fact]
-    public async Task Generated_document_marks_only_protected_operations()
+    public async Task Generated_document_marks_all_operations_as_anonymous()
     {
         using var document = await GetDocumentAsync();
         var paths = document.RootElement.GetProperty("paths");
 
-        var protectedSecurity = paths
-            .GetProperty("/v1/me/profile")
-            .GetProperty("get")
-            .GetProperty("security")
-            .EnumerateArray()
-            .ToArray();
-        Assert.Equal(2, protectedSecurity.Length);
-        Assert.Contains(protectedSecurity, requirement => requirement.TryGetProperty("Bearer", out _));
-        Assert.Contains(protectedSecurity, requirement => requirement.TryGetProperty("LocalMember", out _));
-        Assert.DoesNotContain(
-            protectedSecurity,
-            requirement => requirement.TryGetProperty("Bearer", out _)
-                && requirement.TryGetProperty("LocalMember", out _));
-
+        AssertOperationIsAnonymousWhenDocumented(paths, "/v1/me/profile", "get");
         Assert.False(paths.GetProperty("/v1/events").GetProperty("get").TryGetProperty("security", out _));
         AssertOperationIsAnonymousWhenDocumented(paths, "/health", "get");
         AssertOperationIsAnonymousWhenDocumented(paths, "/ready", "get");

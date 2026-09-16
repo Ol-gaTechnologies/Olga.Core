@@ -15,7 +15,7 @@ The repository is independent from `Olga.Nlp` and can be versioned, built, teste
 - Transactional outbox records for cross-domain and NLP-related integration events.
 - Transactional integration events that allow NLP to refresh its read-only eligibility projections without proxying NLP requests through Core.
 - EF Core InMemory local development and PostgreSQL configuration through `ConnectionStrings__PostgreSql`.
-- OIDC/JWT bearer validation for protected API operations, with Swagger authorization support.
+- Anonymous MVP access for all API operations, with an optional member selector header.
 
 ## What is intentionally not implemented yet
 
@@ -29,9 +29,7 @@ dotnet test Olga.Core.slnx
 dotnet run --project src/Olga.Core.Api
 ```
 
-Protected endpoints accept `Authorization: Bearer <JWT>`. Outside Development, the API requires `Identity__Authority` and `Identity__Audience`; metadata retrieval remains HTTPS-only. Development may also accept a raw member ID in `X-Member-Id` when `Identity__AllowLocalMemberHeader=true`, and seeds members `A123`, `B456`, `D111` plus `event-001`. This local scheme is not registered outside Development.
-
-`GET /v1/events`, `/health`, `/ready`, Swagger UI, and the OpenAPI document are intentionally anonymous. Every other `/v1` operation requires an authenticated subject. Swagger presents only the schemes registered for the current environment and derives operation locks from the same authorization metadata enforced at runtime.
+All endpoints are anonymous for the initial MVP. Member-scoped endpoints use the optional `X-Member-Id` header to select a member and otherwise fall back to `Mvp__DefaultMemberId` (`A123` by default). Local development seeds members `A123`, `B456`, `D111` plus `event-001`. Do not treat this member selector as authentication; restore a verified identity provider before exposing member data beyond the MVP environment.
 
 ## Endpoint groups
 

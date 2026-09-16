@@ -96,7 +96,7 @@ A block is directional as evidence but suppresses discovery and communication in
 
 ## Offline synchronization flow
 
-Every business mutation that affects a mobile read model writes an authorization-scoped `ops.SyncChange`. `GET /v1/sync/changes` returns only global changes or changes scoped to the authenticated member, ordered by `SyncSequence`, with a bounded page and next cursor.
+Every business mutation that affects a mobile read model writes an authorization-scoped `ops.SyncChange`. `GET /v1/sync/changes` returns only global changes or changes scoped to the MVP-selected member, ordered by `SyncSequence`, with a bounded page and next cursor.
 
 The production implementation still needs snapshot bootstrap, cursor-retention detection with `SYNC_CURSOR_EXPIRED`, acknowledgement policy, protected tombstones, and logout/device-revocation purge integration.
 
@@ -122,7 +122,7 @@ Core does not proxy client requests to NLP and does not expose internal NLP proj
 ## Security invariants
 
 - No client connects directly to Azure Database for PostgreSQL, Blob Storage, or messaging infrastructure.
-- Member identity comes from a validated token subject; `X-Member-Id` exists only for local development.
+- During the initial MVP, member context comes from optional `X-Member-Id` and otherwise uses `Mvp__DefaultMemberId`; it is not an authenticated identity.
 - Consent and authorization fail closed.
 - Presence is coarse, short-lived, and never exposed to another member.
 - Chat authorization is re-evaluated on every read and send.
