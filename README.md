@@ -15,10 +15,11 @@ The repository is independent from `Olga.Nlp` and can be versioned, built, teste
 - Transactional outbox records for cross-domain and NLP-related integration events.
 - Transactional integration events that allow NLP to refresh its read-only eligibility projections without proxying NLP requests through Core.
 - EF Core InMemory local development and PostgreSQL configuration through `ConnectionStrings__PostgreSql`.
+- OIDC/JWT bearer validation for protected API operations, with Swagger authorization support.
 
 ## What is intentionally not implemented yet
 
-This foundation is not the full product backlog. CIAM/OIDC token validation, permissions, private file lifecycle, message receipts, notification delivery, privacy task orchestration, retention execution, moderation/admin APIs, database migrations, Service Bus publishing, OpenTelemetry, and production deployment assets remain delivery work. See [Senior architecture review](docs/SENIOR_ARCHITECT_REVIEW.md).
+This foundation is not the full product backlog. CIAM lifecycle integration, permissions, private file lifecycle, message receipts, notification delivery, privacy task orchestration, retention execution, moderation/admin APIs, database migrations, Service Bus publishing, OpenTelemetry, and production deployment assets remain delivery work. See [Senior architecture review](docs/SENIOR_ARCHITECT_REVIEW.md).
 
 ## Run locally
 
@@ -28,7 +29,9 @@ dotnet test Olga.Core.slnx
 dotnet run --project src/Olga.Core.Api
 ```
 
-Development accepts `X-Member-Id` as a local-only identity substitute and seeds members `A123`, `B456`, `D111` plus `event-001`. Production must disable that header and configure real authentication.
+Protected endpoints accept `Authorization: Bearer <JWT>`. Outside Development, the API requires `Identity__Authority` and `Identity__Audience`; metadata retrieval remains HTTPS-only. Development may also accept a raw member ID in `X-Member-Id` when `Identity__AllowLocalMemberHeader=true`, and seeds members `A123`, `B456`, `D111` plus `event-001`. This local scheme is not registered outside Development.
+
+`GET /v1/events`, `/health`, `/ready`, Swagger UI, and the OpenAPI document are intentionally anonymous. Every other `/v1` operation requires an authenticated subject. Swagger presents only the schemes registered for the current environment and derives operation locks from the same authorization metadata enforced at runtime.
 
 ## Endpoint groups
 

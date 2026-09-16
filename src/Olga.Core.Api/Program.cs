@@ -1,6 +1,9 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi;
 using Npgsql;
@@ -12,12 +15,103 @@ using Olga.Core.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.ConfigureHttpJsonOptions(o => { o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower; o.SerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull; });
+var allowLocalMemberHeader = builder.Environment.IsDevelopment()
+    && builder.Configuration.GetValue("Identity:AllowLocalMemberHeader", false);
+var authority = builder.Configuration["Identity:Authority"];
+var audience = builder.Configuration["Identity:Audience"];
+if (!builder.Environment.IsDevelopment()
+    && (string.IsNullOrWhiteSpace(authority) || string.IsNullOrWhiteSpace(audience)))
+{
+    throw new InvalidOperationException(
+        "Identity__Authority and Identity__Audience are required outside Development.");
+}
+if (!string.IsNullOrWhiteSpace(authority)
+    && (!Uri.TryCreate(authority, UriKind.Absolute, out var authorityUri)
+        || authorityUri.Scheme != Uri.UriSchemeHttps))
+{
+    throw new InvalidOperationException("Identity__Authority must be an absolute HTTPS URI.");
+}
+
+var authentication = builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = allowLocalMemberHeader
+        ? CoreAuthenticationSchemes.MemberSelector
+        : JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+});
+authentication.AddJwtBearer(options =>
+{
+    options.Authority = authority;
+    options.Audience = audience;
+    options.MapInboundClaims = false;
+    options.RequireHttpsMetadata = true;
+});
+if (allowLocalMemberHeader)
+{
+    authentication
+        .AddPolicyScheme(CoreAuthenticationSchemes.MemberSelector, null, options =>
+        {
+            options.ForwardDefaultSelector = context =>
+                context.Request.Headers.ContainsKey(CoreAuthenticationSchemes.LocalMemberHeader)
+                    ? CoreAuthenticationSchemes.LocalMember
+                    : JwtBearerDefaults.AuthenticationScheme;
+        })
+        .AddScheme<AuthenticationSchemeOptions, LocalMemberAuthenticationHandler>(
+            CoreAuthenticationSchemes.LocalMember,
+            null);
+}
+builder.Services.AddAuthorization();
 builder.Services.AddOpenApi(options =>
 {
     options.AddDocumentTransformer((document, _, _) =>
     {
         // Resolve API calls against the origin that served Swagger, never Kestrel's internal HTTP endpoint.
         document.Servers = [new OpenApiServer { Url = "/" }];
+        document.Components ??= new OpenApiComponents();
+        document.Components.SecuritySchemes ??= new Dictionary<string, IOpenApiSecurityScheme>();
+        document.Components.SecuritySchemes[CoreAuthenticationSchemes.Bearer] = new OpenApiSecurityScheme
+        {
+            Type = SecuritySchemeType.Http,
+            Scheme = "bearer",
+            BearerFormat = "JWT",
+            Name = "Authorization",
+            In = ParameterLocation.Header,
+            Description = "Enter the JWT only. Swagger sends it as: Authorization: Bearer {token}."
+        };
+        if (allowLocalMemberHeader)
+        {
+            document.Components.SecuritySchemes[CoreAuthenticationSchemes.LocalMember] = new OpenApiSecurityScheme
+            {
+                Type = SecuritySchemeType.ApiKey,
+                Name = CoreAuthenticationSchemes.LocalMemberHeader,
+                In = ParameterLocation.Header,
+                Description = "Development only. Enter a raw seeded member ID without a prefix."
+            };
+        }
+        return Task.CompletedTask;
+    });
+    options.AddOperationTransformer((operation, context, _) =>
+    {
+        var metadata = context.Description.ActionDescriptor.EndpointMetadata;
+        var isProtected = metadata.OfType<IAuthorizeData>().Any()
+            && !metadata.OfType<IAllowAnonymous>().Any();
+        if (!isProtected)
+        {
+            return Task.CompletedTask;
+        }
+
+        operation.Security ??= [];
+        operation.Security.Add(new OpenApiSecurityRequirement
+        {
+            [new OpenApiSecuritySchemeReference(CoreAuthenticationSchemes.Bearer, context.Document)] = []
+        });
+        if (allowLocalMemberHeader)
+        {
+            operation.Security.Add(new OpenApiSecurityRequirement
+            {
+                [new OpenApiSecuritySchemeReference(CoreAuthenticationSchemes.LocalMember, context.Document)] = []
+            });
+        }
         return Task.CompletedTask;
     });
 });
@@ -56,6 +150,8 @@ app.Use(async (context, next) =>
     catch (Exception ex) when (PostgreSqlConfiguration.IsUnavailable(ex)) { await Error(context, 503, "DATABASE_UNAVAILABLE"); }
     catch (Exception) { await Error(context, 500, "INTERNAL_ERROR"); }
 });
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapOpenApi("/swagger/{documentName}/swagger.json");
 app.UseSwaggerUI(options =>
@@ -66,33 +162,33 @@ app.UseSwaggerUI(options =>
 app.MapHealthChecks("/health");
 app.MapGet("/ready", async (CoreDbContext db, CancellationToken ct) => await db.Database.CanConnectAsync(ct) ? Results.Ok(new { status = "ready" }) : Results.StatusCode(503));
 
-app.MapGet("/v1/me/profile", async (HttpContext c, ICoreService s, CancellationToken ct) => { var id = Member(c, app); var value = await s.GetOwnProfileAsync(id, ct); c.Response.Headers.ETag = value.ETag; return Results.Ok(value); });
-app.MapPatch("/v1/me/profile", async (HttpContext c, ProfileUpdateRequest body, ICoreService s, CancellationToken ct) => { var value = await s.UpdateProfileAsync(Member(c, app), body, c.Request.Headers.IfMatch.FirstOrDefault(), ct); c.Response.Headers.ETag = value.ETag; return Results.Ok(value); });
-app.MapGet("/v1/members/{memberId}", async (HttpContext c, string memberId, ICoreService s, CancellationToken ct) => Results.Ok(await s.GetVisibleProfileAsync(Member(c, app), memberId, ct)));
-app.MapPost("/v1/me/consents", async (HttpContext c, ConsentRequest body, ICoreService s, CancellationToken ct) => Results.Created("/v1/me/consents", await s.RecordConsentAsync(Member(c, app), body, ct)));
-app.MapGet("/v1/events", async (ICoreService s, CancellationToken ct) => Results.Ok(await s.GetEventsAsync(ct)));
-app.MapPost("/v1/events/{eventId}/register", async (HttpContext c, string eventId, ICoreService s, CancellationToken ct) => Results.Ok(await s.RegisterAsync(Member(c, app), eventId, ct)));
-app.MapPost("/v1/events/{eventId}/live-mode", async (HttpContext c, string eventId, LiveModeRequest body, ICoreService s, CancellationToken ct) => Results.Ok(await s.StartLiveModeAsync(Member(c, app), eventId, body, ct)));
-app.MapDelete("/v1/events/{eventId}/live-mode", async (HttpContext c, string eventId, ICoreService s, CancellationToken ct) => { await s.StopLiveModeAsync(Member(c, app), eventId, ct); return Results.NoContent(); });
-app.MapPost("/v1/events/{eventId}/presence", async (HttpContext c, string eventId, PresenceRequest body, ICoreService s, CancellationToken ct) => { await s.RecordPresenceAsync(Member(c, app), eventId, body, ct); return Results.Accepted(); });
-app.MapPost("/v1/connection-requests", async (HttpContext c, ConnectionRequestCreate body, ICoreService s, CancellationToken ct) => Results.Created("/v1/connection-requests", await s.CreateConnectionRequestAsync(Member(c, app), body, ct)));
-app.MapPatch("/v1/connection-requests/{requestId}", async (HttpContext c, string requestId, ConnectionDecisionRequest body, ICoreService s, CancellationToken ct) => Results.Ok(await s.DecideConnectionRequestAsync(Member(c, app), requestId, body, Idempotency(c), ct)));
-app.MapGet("/v1/connections", async (HttpContext c, ICoreService s, CancellationToken ct) => Results.Ok(await s.GetConnectionsAsync(Member(c, app), ct)));
-app.MapPost("/v1/members/block", async (HttpContext c, BlockRequest body, ICoreService s, CancellationToken ct) => { await s.BlockAsync(Member(c, app), body, ct); return Results.NoContent(); });
-app.MapGet("/v1/conversations/{conversationId}/messages", async (HttpContext c, string conversationId, long? after, int? limit, ICoreService s, CancellationToken ct) => Results.Ok(await s.GetMessagesAsync(Member(c, app), conversationId, after ?? 0, limit ?? 50, ct)));
-app.MapPost("/v1/conversations/{conversationId}/messages", async (HttpContext c, string conversationId, MessageCreateRequest body, ICoreService s, CancellationToken ct) => Results.Created($"/v1/conversations/{conversationId}/messages/{body.MessageId}", await s.SendMessageAsync(Member(c, app), conversationId, body, Idempotency(c), ct)));
-app.MapPut("/v1/messages/{messageId}/receipt", async (HttpContext c, string messageId, MessageReceiptRequest body, ICoreService s, CancellationToken ct) => Results.Ok(await s.SaveMessageReceiptAsync(Member(c, app), messageId, body, Idempotency(c), ct)));
-app.MapPatch("/v1/me/notification-preferences", async (HttpContext c, NotificationPreferenceRequest body, ICoreService s, CancellationToken ct) => Results.Ok(await s.SetNotificationPreferenceAsync(Member(c, app), body, ct)));
-app.MapPost("/v1/me/privacy-requests", async (HttpContext c, PrivacyRequestCreate body, ICoreService s, CancellationToken ct) => Results.Accepted("/v1/me/privacy-requests", await s.CreatePrivacyRequestAsync(Member(c, app), body, ct)));
-app.MapGet("/v1/sync/changes", async (HttpContext c, string? cursor, int? limit, ICoreService s, CancellationToken ct) => Results.Ok(await s.GetChangesAsync(Member(c, app), DecodeCursor(cursor), limit ?? 100, ct)));
+var v1 = app.MapGroup("/v1").RequireAuthorization();
+v1.MapGet("/me/profile", async (HttpContext c, ICoreService s, CancellationToken ct) => { var id = Member(c); var value = await s.GetOwnProfileAsync(id, ct); c.Response.Headers.ETag = value.ETag; return Results.Ok(value); });
+v1.MapPatch("/me/profile", async (HttpContext c, ProfileUpdateRequest body, ICoreService s, CancellationToken ct) => { var value = await s.UpdateProfileAsync(Member(c), body, c.Request.Headers.IfMatch.FirstOrDefault(), ct); c.Response.Headers.ETag = value.ETag; return Results.Ok(value); });
+v1.MapGet("/members/{memberId}", async (HttpContext c, string memberId, ICoreService s, CancellationToken ct) => Results.Ok(await s.GetVisibleProfileAsync(Member(c), memberId, ct)));
+v1.MapPost("/me/consents", async (HttpContext c, ConsentRequest body, ICoreService s, CancellationToken ct) => Results.Created("/v1/me/consents", await s.RecordConsentAsync(Member(c), body, ct)));
+v1.MapGet("/events", async (ICoreService s, CancellationToken ct) => Results.Ok(await s.GetEventsAsync(ct))).AllowAnonymous();
+v1.MapPost("/events/{eventId}/register", async (HttpContext c, string eventId, ICoreService s, CancellationToken ct) => Results.Ok(await s.RegisterAsync(Member(c), eventId, ct)));
+v1.MapPost("/events/{eventId}/live-mode", async (HttpContext c, string eventId, LiveModeRequest body, ICoreService s, CancellationToken ct) => Results.Ok(await s.StartLiveModeAsync(Member(c), eventId, body, ct)));
+v1.MapDelete("/events/{eventId}/live-mode", async (HttpContext c, string eventId, ICoreService s, CancellationToken ct) => { await s.StopLiveModeAsync(Member(c), eventId, ct); return Results.NoContent(); });
+v1.MapPost("/events/{eventId}/presence", async (HttpContext c, string eventId, PresenceRequest body, ICoreService s, CancellationToken ct) => { await s.RecordPresenceAsync(Member(c), eventId, body, ct); return Results.Accepted(); });
+v1.MapPost("/connection-requests", async (HttpContext c, ConnectionRequestCreate body, ICoreService s, CancellationToken ct) => Results.Created("/v1/connection-requests", await s.CreateConnectionRequestAsync(Member(c), body, ct)));
+v1.MapPatch("/connection-requests/{requestId}", async (HttpContext c, string requestId, ConnectionDecisionRequest body, ICoreService s, CancellationToken ct) => Results.Ok(await s.DecideConnectionRequestAsync(Member(c), requestId, body, Idempotency(c), ct)));
+v1.MapGet("/connections", async (HttpContext c, ICoreService s, CancellationToken ct) => Results.Ok(await s.GetConnectionsAsync(Member(c), ct)));
+v1.MapPost("/members/block", async (HttpContext c, BlockRequest body, ICoreService s, CancellationToken ct) => { await s.BlockAsync(Member(c), body, ct); return Results.NoContent(); });
+v1.MapGet("/conversations/{conversationId}/messages", async (HttpContext c, string conversationId, long? after, int? limit, ICoreService s, CancellationToken ct) => Results.Ok(await s.GetMessagesAsync(Member(c), conversationId, after ?? 0, limit ?? 50, ct)));
+v1.MapPost("/conversations/{conversationId}/messages", async (HttpContext c, string conversationId, MessageCreateRequest body, ICoreService s, CancellationToken ct) => Results.Created($"/v1/conversations/{conversationId}/messages/{body.MessageId}", await s.SendMessageAsync(Member(c), conversationId, body, Idempotency(c), ct)));
+v1.MapPut("/messages/{messageId}/receipt", async (HttpContext c, string messageId, MessageReceiptRequest body, ICoreService s, CancellationToken ct) => Results.Ok(await s.SaveMessageReceiptAsync(Member(c), messageId, body, Idempotency(c), ct)));
+v1.MapPatch("/me/notification-preferences", async (HttpContext c, NotificationPreferenceRequest body, ICoreService s, CancellationToken ct) => Results.Ok(await s.SetNotificationPreferenceAsync(Member(c), body, ct)));
+v1.MapPost("/me/privacy-requests", async (HttpContext c, PrivacyRequestCreate body, ICoreService s, CancellationToken ct) => Results.Accepted("/v1/me/privacy-requests", await s.CreatePrivacyRequestAsync(Member(c), body, ct)));
+v1.MapGet("/sync/changes", async (HttpContext c, string? cursor, int? limit, ICoreService s, CancellationToken ct) => Results.Ok(await s.GetChangesAsync(Member(c), DecodeCursor(cursor), limit ?? 100, ct)));
 
 if (local) await LocalDevelopmentSeeder.SeedAsync(app.Services, CancellationToken.None);
 app.Run();
 
-static string Member(HttpContext context, WebApplication app)
+static string Member(HttpContext context)
 {
     var id = context.User.FindFirst("sub")?.Value;
-    if (string.IsNullOrWhiteSpace(id) && app.Environment.IsDevelopment() && app.Configuration.GetValue("Identity:AllowLocalMemberHeader", true)) id = context.Request.Headers["X-Member-Id"].FirstOrDefault();
     return !string.IsNullOrWhiteSpace(id) ? id : throw new DomainException("MEMBER_IDENTITY_REQUIRED", 401);
 }
 
