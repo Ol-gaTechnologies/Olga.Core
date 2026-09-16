@@ -13,7 +13,7 @@ The Core API does not own NLP intents, embeddings, model versions, ranking confi
 | `Olga.Core.Domain` | Product entities, lifecycle state, and domain error type. Contains no web, database, or NLP dependencies. | None |
 | `Olga.Core.Contracts` | JSON request/response and error contracts exposed at the HTTP boundary. | None |
 | `Olga.Core.Application` | Use cases and invariant enforcement. Produces sync changes and outbox events in the same unit of work as business changes. | Domain, Contracts |
-| `Olga.Core.Infrastructure` | EF Core unit of work, Azure SQL schema mapping, indexes, and local seed data. | Application, Domain |
+| `Olga.Core.Infrastructure` | EF Core/Npgsql unit of work, PostgreSQL schema mapping, indexes, and local seed data. | Application, Domain |
 | `Olga.Core.Api` | Minimal API endpoints, correlation/error handling, identity extraction, OpenAPI, health, and readiness. | Application, Contracts, Infrastructure |
 | `Olga.Core.Worker` | Background outbox polling seam. Transport publishing and delivery confirmation remain to be implemented. | Infrastructure |
 | `Olga.Core.Tests` | Boundary and invariant tests for ETag updates, consent-gated Live Mode, connection/chat creation, idempotent messages, and blocking. | Application, Infrastructure |
@@ -96,7 +96,7 @@ A block is directional as evidence but suppresses discovery and communication in
 
 ## Offline synchronization flow
 
-Every business mutation that affects a mobile read model writes an authorization-scoped `ops.SyncChange`. `GET /v1/sync/changes` returns only global changes or changes scoped to the authenticated member, ordered by `SyncSequence`, with a bounded page and next cursor.
+Every business mutation that affects a mobile read model writes an authorization-scoped `ops.SyncChange`. `GET /v1/sync/changes` returns only global changes or changes scoped to the MVP-selected member, ordered by `SyncSequence`, with a bounded page and next cursor.
 
 The production implementation still needs snapshot bootstrap, cursor-retention detection with `SYNC_CURSOR_EXPIRED`, acknowledgement policy, protected tombstones, and logout/device-revocation purge integration.
 
@@ -109,22 +109,20 @@ Core business mutation
   -> transport publisher
   -> NLP refreshes/re-queries approved eligibility projections
 
-NLP match request
-  -> NLP obtains bounded eligible members and pair relationships
-  -> Core projection reports eligible/connected/blocked state
+Client match request -> directly exposed NLP API
+  -> NLP obtains bounded eligible members and pair relationships from approved read-only views
   -> NLP filters before ranking
   -> NLP ranks and persists results in nlp schema
   -> NlpMatchRequestCompleted.v1
   -> Core notification/sync workers create product-visible outcomes
 ```
 
-The implemented HTTP projection endpoints are an integration seam for local development. The target Azure SQL design may replace them with least-privilege read-only views (`nlp.vw_MemberContextEligibility` and `nlp.vw_MemberRelationship`) or retain service calls. Choose one production path and load-test it; do not run both as competing authorities.
+Core does not proxy client requests to NLP and does not expose internal NLP projection endpoints. Clients call the NLP API directly through the approved API gateway. NLP reads eligibility and relationship state from the least-privilege, read-only views `nlp.vw_member_context_eligibility` and `nlp.vw_member_relationship`. Core remains authoritative for consent, event participation, connections, and blocks.
 
 ## Security invariants
 
-- No client connects directly to Azure SQL, Blob Storage, or messaging infrastructure.
-- Member identity comes from a validated token subject; `X-Member-Id` exists only for local development.
-- The internal NLP projection endpoints require a service identity outside Development.
+- No client connects directly to Azure Database for PostgreSQL, Blob Storage, or messaging infrastructure.
+- During the initial MVP, member context comes from optional `X-Member-Id` and otherwise uses `Mvp__DefaultMemberId`; it is not an authenticated identity.
 - Consent and authorization fail closed.
 - Presence is coarse, short-lived, and never exposed to another member.
 - Chat authorization is re-evaluated on every read and send.
@@ -134,3 +132,11 @@ The implemented HTTP projection endpoints are an integration seam for local deve
 ## Delivery status
 
 The implemented slice demonstrates the solution boundary and the highest-risk interaction invariants. It is not yet production complete. The prioritized gaps and acceptance gates are maintained in [Senior architecture review](docs/SENIOR_ARCHITECT_REVIEW.md).
+
+## PostgreSQL v2.4 integration
+
+The code model follows the physical `lower_snake_case` names in the database repository. Profile summary and role category map to `professional_summary` and `role_category`; consent resolves an active `consent_policy` and records its immutable `policy_id`; Live Mode stores the required consent evidence and uses `ACTIVE`, `DISABLED`, and `EXPIRED` lifecycle values.
+
+PostgreSQL deployments execute `social.accept_connection_request`, `chat.save_message`, and `chat.save_message_receipt` through typed Npgsql parameters. Those database-owned functions are the transaction boundary for authorization rechecks, idempotency records, participant creation, sync changes, and outbox events. The in-memory profile retains equivalent application logic for isolated tests only.
+
+Every `/v1` mutation requires a bounded `Idempotency-Key`. Sync pagination exposes the numeric database sequence only as an opaque Base64 cursor. Mutable mapped resources use trigger-generated `row_version` concurrency tokens and API ETags.

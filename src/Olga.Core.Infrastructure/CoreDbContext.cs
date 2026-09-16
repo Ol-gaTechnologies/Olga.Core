@@ -1,13 +1,20 @@
+using System.Data;
+using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
+using NpgsqlTypes;
 using Olga.Core.Application;
 using Olga.Core.Domain;
+using Contracts = Olga.Core.Contracts;
 
 namespace Olga.Core.Infrastructure;
 
 public sealed class CoreDbContext(DbContextOptions<CoreDbContext> options) : DbContext(options), ICoreStore
 {
+    bool ICoreStore.IsRelational => Database.IsRelational();
     public DbSet<MemberProfile> MemberProfiles => Set<MemberProfile>();
+    public DbSet<ConsentPolicy> ConsentPolicies => Set<ConsentPolicy>();
     public DbSet<MemberConsent> MemberConsents => Set<MemberConsent>();
     public DbSet<EventRecord> EventRecords => Set<EventRecord>();
     public DbSet<EventRegistration> EventRegistrations => Set<EventRegistration>();
@@ -17,13 +24,16 @@ public sealed class CoreDbContext(DbContextOptions<CoreDbContext> options) : DbC
     public DbSet<Connection> SocialConnections => Set<Connection>();
     public DbSet<MemberBlock> MemberBlocks => Set<MemberBlock>();
     public DbSet<Conversation> ChatConversations => Set<Conversation>();
+    public DbSet<ConversationParticipant> ConversationParticipants => Set<ConversationParticipant>();
     public DbSet<Message> ChatMessages => Set<Message>();
+    public DbSet<MessageReceipt> MessageReceipts => Set<MessageReceipt>();
     public DbSet<NotificationPreference> Preferences => Set<NotificationPreference>();
     public DbSet<PrivacyRequest> MemberPrivacyRequests => Set<PrivacyRequest>();
     public DbSet<SyncChange> Changes => Set<SyncChange>();
     public DbSet<OutboxEvent> OutboxEvents => Set<OutboxEvent>();
 
     IQueryable<MemberProfile> ICoreStore.Profiles => MemberProfiles;
+    IQueryable<ConsentPolicy> ICoreStore.ConsentPolicies => ConsentPolicies;
     IQueryable<MemberConsent> ICoreStore.Consents => MemberConsents;
     IQueryable<EventRecord> ICoreStore.Events => EventRecords;
     IQueryable<EventRegistration> ICoreStore.Registrations => EventRegistrations;
@@ -33,7 +43,9 @@ public sealed class CoreDbContext(DbContextOptions<CoreDbContext> options) : DbC
     IQueryable<Connection> ICoreStore.Connections => SocialConnections;
     IQueryable<MemberBlock> ICoreStore.Blocks => MemberBlocks;
     IQueryable<Conversation> ICoreStore.Conversations => ChatConversations;
+    IQueryable<ConversationParticipant> ICoreStore.ConversationParticipants => ConversationParticipants;
     IQueryable<Message> ICoreStore.Messages => ChatMessages;
+    IQueryable<MessageReceipt> ICoreStore.MessageReceipts => MessageReceipts;
     IQueryable<NotificationPreference> ICoreStore.NotificationPreferences => Preferences;
     IQueryable<PrivacyRequest> ICoreStore.PrivacyRequests => MemberPrivacyRequests;
     IQueryable<SyncChange> ICoreStore.SyncChanges => Changes;
@@ -41,6 +53,74 @@ public sealed class CoreDbContext(DbContextOptions<CoreDbContext> options) : DbC
     void ICoreStore.Add<T>(T entity) => Set<T>().Add(entity);
     void ICoreStore.Remove<T>(T entity) => Set<T>().Remove(entity);
     Task ICoreStore.SaveAsync(CancellationToken ct) => SaveChangesAsync(ct);
+
+    async Task<(string ConnectionId, string ConversationId)> ICoreStore.AcceptConnectionRequestAsync(string requestId, string recipientId, string connectionId, string conversationId, string idempotencyKey, string requestHash, CancellationToken ct)
+    {
+        await using var command = CreateCommand("SELECT * FROM social.accept_connection_request(@request_id, @recipient_id, @connection_id, @conversation_id, @idempotency_key, @request_hash, @idempotency_expires_at, @sync_expires_at)");
+        AddVarchar(command, "request_id", requestId, 64); AddVarchar(command, "recipient_id", recipientId, 64);
+        AddVarchar(command, "connection_id", connectionId, 64); AddVarchar(command, "conversation_id", conversationId, 64);
+        AddVarchar(command, "idempotency_key", idempotencyKey, 128); AddChar(command, "request_hash", requestHash);
+        AddTimestamp(command, "idempotency_expires_at", DateTimeOffset.UtcNow.AddHours(24)); AddTimestamp(command, "sync_expires_at", DateTimeOffset.UtcNow.AddDays(30));
+        var close = await OpenIfNeededAsync(ct);
+        try
+        {
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct)) throw new InvalidOperationException("accept_connection_request returned no result.");
+            return (reader.GetString(0), reader.GetString(1));
+        }
+        finally { if (close) await Database.CloseConnectionAsync(); }
+    }
+
+    async Task<Message> ICoreStore.SaveMessageAsync(string memberId, string conversationId, Contracts.MessageCreateRequest request, string idempotencyKey, string requestHash, CancellationToken ct)
+    {
+        await using var command = CreateCommand("SELECT * FROM chat.save_message(@message_id, @conversation_id, @sender_id, @message_type, @body, @client_sent_at, @idempotency_key, @request_hash, @idempotency_expires_at, @sync_expires_at)");
+        AddVarchar(command, "message_id", request.MessageId, 64); AddVarchar(command, "conversation_id", conversationId, 64); AddVarchar(command, "sender_id", memberId, 64); AddVarchar(command, "message_type", request.MessageType, 20);
+        command.Parameters.Add(new NpgsqlParameter("body", NpgsqlDbType.Text) { Value = request.Body is null ? DBNull.Value : request.Body });
+        command.Parameters.Add(new NpgsqlParameter("client_sent_at", NpgsqlDbType.TimestampTz) { Value = request.ClientSentAt is null ? DBNull.Value : request.ClientSentAt.Value.ToUniversalTime() });
+        AddVarchar(command, "idempotency_key", idempotencyKey, 128); AddChar(command, "request_hash", requestHash);
+        AddTimestamp(command, "idempotency_expires_at", DateTimeOffset.UtcNow.AddHours(24)); AddTimestamp(command, "sync_expires_at", DateTimeOffset.UtcNow.AddDays(30));
+        var close = await OpenIfNeededAsync(ct);
+        try
+        {
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct)) throw new InvalidOperationException("save_message returned no result.");
+            return new Message
+            {
+                MessageId = reader.GetString(reader.GetOrdinal("message_id")), ConversationId = reader.GetString(reader.GetOrdinal("conversation_id")), SenderMemberId = reader.GetString(reader.GetOrdinal("sender_member_id")),
+                MessageType = reader.GetString(reader.GetOrdinal("message_type")), Body = GetNullableString(reader, "body"), ClientSentAt = GetNullableInstant(reader, "client_sent_at"),
+                ServerSequence = reader.GetInt64(reader.GetOrdinal("server_sequence")), ModerationStatus = reader.GetString(reader.GetOrdinal("moderation_status")), DeletedAt = GetNullableInstant(reader, "deleted_at"),
+                CreatedAt = GetInstant(reader, "created_at"), UpdatedAt = GetInstant(reader, "updated_at"), RowVersion = reader.GetInt64(reader.GetOrdinal("row_version"))
+            };
+        }
+        finally { if (close) await Database.CloseConnectionAsync(); }
+    }
+
+    async Task<MessageReceipt> ICoreStore.SaveMessageReceiptAsync(string memberId, string messageId, Contracts.MessageReceiptRequest request, string idempotencyKey, string requestHash, CancellationToken ct)
+    {
+        await using var command = CreateCommand("SELECT * FROM chat.save_message_receipt(@message_id, @member_id, @delivered_at, @read_at, @idempotency_key, @request_hash, @idempotency_expires_at, @sync_expires_at)");
+        AddVarchar(command, "message_id", messageId, 64); AddVarchar(command, "member_id", memberId, 64);
+        command.Parameters.Add(new NpgsqlParameter("delivered_at", NpgsqlDbType.TimestampTz) { Value = request.DeliveredAt is null ? DBNull.Value : request.DeliveredAt.Value.ToUniversalTime() });
+        command.Parameters.Add(new NpgsqlParameter("read_at", NpgsqlDbType.TimestampTz) { Value = request.ReadAt is null ? DBNull.Value : request.ReadAt.Value.ToUniversalTime() });
+        AddVarchar(command, "idempotency_key", idempotencyKey, 128); AddChar(command, "request_hash", requestHash);
+        AddTimestamp(command, "idempotency_expires_at", DateTimeOffset.UtcNow.AddHours(24)); AddTimestamp(command, "sync_expires_at", DateTimeOffset.UtcNow.AddDays(30));
+        var close = await OpenIfNeededAsync(ct);
+        try
+        {
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct)) throw new InvalidOperationException("save_message_receipt returned no result.");
+            return new MessageReceipt { MessageId = reader.GetString(reader.GetOrdinal("message_id")), MemberId = reader.GetString(reader.GetOrdinal("member_id")), DeliveredAt = GetNullableInstant(reader, "delivered_at"), ReadAt = GetNullableInstant(reader, "read_at"), UpdatedAt = GetInstant(reader, "updated_at") };
+        }
+        finally { if (close) await Database.CloseConnectionAsync(); }
+    }
+
+    private NpgsqlCommand CreateCommand(string sql) => new(sql, (NpgsqlConnection)Database.GetDbConnection());
+    private async Task<bool> OpenIfNeededAsync(CancellationToken ct) { var close = Database.GetDbConnection().State != ConnectionState.Open; if (close) await Database.OpenConnectionAsync(ct); return close; }
+    private static void AddVarchar(NpgsqlCommand command, string name, string value, int size) => command.Parameters.Add(new NpgsqlParameter(name, NpgsqlDbType.Varchar) { Size = size, Value = value });
+    private static void AddChar(NpgsqlCommand command, string name, string value) => command.Parameters.Add(new NpgsqlParameter(name, NpgsqlDbType.Char) { Size = 64, Value = value });
+    private static void AddTimestamp(NpgsqlCommand command, string name, DateTimeOffset value) => command.Parameters.Add(new NpgsqlParameter(name, NpgsqlDbType.TimestampTz) { Value = value.ToUniversalTime() });
+    private static string? GetNullableString(DbDataReader reader, string name) { var i = reader.GetOrdinal(name); return reader.IsDBNull(i) ? null : reader.GetString(i); }
+    private static DateTimeOffset GetInstant(DbDataReader reader, string name) => new(DateTime.SpecifyKind(reader.GetDateTime(reader.GetOrdinal(name)), DateTimeKind.Utc));
+    private static DateTimeOffset? GetNullableInstant(DbDataReader reader, string name) { var i = reader.GetOrdinal(name); return reader.IsDBNull(i) ? null : new DateTimeOffset(DateTime.SpecifyKind(reader.GetDateTime(i), DateTimeKind.Utc)); }
 
     protected override void ConfigureConventions(ModelConfigurationBuilder conventions)
     {
@@ -53,22 +133,34 @@ public sealed class CoreDbContext(DbContextOptions<CoreDbContext> options) : DbC
 
     protected override void OnModelCreating(ModelBuilder model)
     {
-        model.Entity<MemberProfile>(e => { e.ToTable("MemberProfile", "core"); e.HasKey(x => x.MemberId); e.Property(x => x.MemberId).HasMaxLength(64); e.Property(x => x.CommunityId).HasMaxLength(64); e.Property(x => x.DisplayName).HasMaxLength(150); e.Property(x => x.Headline).HasMaxLength(240); e.Property(x => x.Biography).HasMaxLength(2000); e.Property(x => x.Visibility).HasMaxLength(20); e.Property(x => x.Status).HasMaxLength(24); e.Property(x => x.Version).HasColumnName("row_version").HasColumnType("bigint").HasDefaultValue(1L).IsConcurrencyToken(); e.HasIndex(x => new { x.CommunityId, x.Status }); });
-        model.Entity<MemberConsent>(e => { e.ToTable("MemberConsent", "consent"); e.HasKey(x => x.Id); e.Property(x => x.Id).ValueGeneratedOnAdd(); e.Property(x => x.MemberId).HasMaxLength(64); e.Property(x => x.PurposeCode).HasMaxLength(64); e.HasIndex(x => new { x.MemberId, x.PurposeCode, x.CapturedAt }); });
-        model.Entity<EventRecord>(e => { e.ToTable("Event", "event"); e.HasKey(x => x.EventId); e.Property(x => x.EventId).HasMaxLength(64); e.Property(x => x.CommunityId).HasMaxLength(64); e.Property(x => x.Name).HasMaxLength(250); e.Property(x => x.Status).HasMaxLength(24); e.HasIndex(x => new { x.CommunityId, x.Status, x.StartsAt }); });
-        model.Entity<EventRegistration>(e => { e.ToTable("EventRegistration", "event"); e.HasKey(x => x.Id); e.Property(x => x.Id).ValueGeneratedOnAdd(); e.HasIndex(x => new { x.EventId, x.MemberId }).IsUnique(); });
-        model.Entity<LiveModeSession>(e => { e.ToTable("LiveModeSession", "event"); e.HasKey(x => x.SessionId); e.Property(x => x.SessionId).HasMaxLength(64); e.HasIndex(x => new { x.EventId, x.MemberId, x.Status }); });
-        model.Entity<EventPresence>(e => { e.ToTable("EventPresence", "event"); e.HasKey(x => x.Id); e.Property(x => x.Id).ValueGeneratedOnAdd(); e.Property(x => x.SessionId).HasMaxLength(64); e.Property(x => x.CoarseCell).HasMaxLength(32); e.HasIndex(x => new { x.SessionId, x.ExpiresAt }); });
-        model.Entity<ConnectionRequest>(e => { e.ToTable("ConnectionRequest", "social"); e.HasKey(x => x.RequestId); e.Property(x => x.RequestId).HasMaxLength(64); e.HasIndex(x => new { x.RecipientMemberId, x.Status, x.ExpiresAt }); });
-        model.Entity<Connection>(e => { e.ToTable("Connection", "social"); e.HasKey(x => x.ConnectionId); e.Property(x => x.ConnectionId).HasMaxLength(64); e.HasIndex(x => new { x.MemberLowId, x.MemberHighId }).IsUnique(); });
-        model.Entity<MemberBlock>(e => { e.ToTable("MemberBlock", "social"); e.HasKey(x => x.Id); e.Property(x => x.Id).ValueGeneratedOnAdd(); e.HasIndex(x => new { x.BlockerMemberId, x.BlockedMemberId }); });
-        model.Entity<Conversation>(e => { e.ToTable("Conversation", "chat"); e.HasKey(x => x.ConversationId); e.Property(x => x.ConversationId).HasMaxLength(64); e.HasIndex(x => x.ConnectionId).IsUnique(); });
-        model.Entity<Message>(e => { e.ToTable("Message", "chat"); e.HasKey(x => x.MessageId); e.Property(x => x.MessageId).HasMaxLength(64); e.Property(x => x.Body).HasColumnType("text"); e.HasIndex(x => new { x.ConversationId, x.ServerSequence }).IsUnique(); });
-        model.Entity<NotificationPreference>(e => { e.ToTable("NotificationPreference", "notification"); e.HasKey(x => new { x.MemberId, x.PurposeCode }); e.Property(x => x.Enabled).HasColumnType("boolean"); });
-        model.Entity<PrivacyRequest>(e => { e.ToTable("PrivacyRequest", "consent"); e.HasKey(x => x.PrivacyRequestId); e.Property(x => x.PrivacyRequestId).HasMaxLength(64); e.HasIndex(x => new { x.MemberId, x.CreatedAt }); });
-        model.Entity<SyncChange>(e => { e.ToTable("SyncChange", "ops"); e.HasKey(x => x.SyncSequence); e.Property(x => x.SyncSequence).ValueGeneratedOnAdd(); e.Property(x => x.PayloadJson).HasColumnType("jsonb"); e.HasIndex(x => new { x.MemberScopeId, x.SyncSequence }); });
-        model.Entity<OutboxEvent>(e => { e.ToTable("OutboxEvent", "ops"); e.HasKey(x => x.OutboxEventId); e.Property(x => x.OutboxEventId).HasMaxLength(64); e.Property(x => x.PayloadJson).HasColumnType("jsonb"); e.HasIndex(x => new { x.PublishedAt, x.OccurredAt }); });
+        model.Entity<MemberProfile>(e => { e.ToTable("member_profile", "core"); e.HasKey(x => x.MemberId); e.Property(x => x.MemberId).HasMaxLength(64); e.Property(x => x.DisplayName).HasMaxLength(150); e.Property(x => x.Headline).HasMaxLength(240); e.Property(x => x.Biography).HasColumnName("professional_summary").HasMaxLength(2000); e.Property(x => x.Sector).HasColumnName("role_category").HasMaxLength(64); e.Property(x => x.Status).HasColumnName("profile_status").HasMaxLength(24); e.Property(x => x.Visibility).HasMaxLength(20); e.Property(x => x.CompletenessScore).HasPrecision(5, 2); ConfigureVersion(e.Property(x => x.Version).HasColumnName("row_version")); });
+        model.Entity<ConsentPolicy>(e => { e.ToTable("consent_policy", "consent"); e.HasKey(x => x.PolicyId); e.Property(x => x.PolicyId).HasMaxLength(64); e.Property(x => x.PurposeCode).HasMaxLength(64); e.Property(x => x.Version).HasMaxLength(32); e.Property(x => x.ContentHash).HasColumnType("character(64)").IsFixedLength(); ConfigureVersion(e.Property(x => x.RowVersion)); });
+        model.Entity<MemberConsent>(e => { e.ToTable("member_consent", "consent"); e.HasKey(x => x.Id); e.Property(x => x.Id).HasColumnName("member_consent_id").UseIdentityByDefaultColumn(); e.Property(x => x.MemberId).HasMaxLength(64); e.Property(x => x.PolicyId).HasMaxLength(64); e.Property(x => x.EvidenceJson).HasColumnType("jsonb"); e.HasIndex(x => new { x.MemberId, x.PolicyId, x.CapturedAt }); });
+        model.Entity<EventRecord>(e => { e.ToTable("event", "event"); e.HasKey(x => x.EventId); e.Property(x => x.EventId).HasMaxLength(64); e.Property(x => x.CommunityId).HasMaxLength(64); e.Property(x => x.Name).HasMaxLength(250); e.Property(x => x.Status).HasMaxLength(24); ConfigureVersion(e.Property(x => x.RowVersion)); e.HasIndex(x => new { x.CommunityId, x.Status, x.StartsAt }); });
+        model.Entity<EventRegistration>(e => { e.ToTable("event_registration", "event"); e.HasKey(x => x.Id); e.Property(x => x.Id).HasColumnName("event_registration_id").UseIdentityByDefaultColumn(); ConfigureVersion(e.Property(x => x.RowVersion)); e.HasIndex(x => new { x.EventId, x.MemberId }).IsUnique(); });
+        model.Entity<LiveModeSession>(e => { e.ToTable("live_mode_session", "event"); e.HasKey(x => x.SessionId); e.Property(x => x.SessionId).HasColumnName("live_session_id").HasMaxLength(64); e.Property(x => x.StartedAt).HasColumnName("activated_at"); e.Property(x => x.RevokedAt).HasColumnName("disabled_at"); ConfigureVersion(e.Property(x => x.RowVersion)); e.HasIndex(x => new { x.EventId, x.MemberId, x.Status }); });
+        model.Entity<EventPresence>(e => { e.ToTable("event_presence", "event"); e.HasKey(x => x.Id); e.Property(x => x.Id).HasColumnName("presence_id").UseIdentityByDefaultColumn(); e.Property(x => x.SessionId).HasColumnName("live_session_id").HasMaxLength(64); e.Property(x => x.CoarseCell).HasMaxLength(32); e.HasIndex(x => new { x.SessionId, x.ExpiresAt }); });
+        model.Entity<ConnectionRequest>(e => { e.ToTable("connection_request", "social"); e.HasKey(x => x.RequestId); e.Property(x => x.RequestId).HasColumnName("connection_request_id").HasMaxLength(64); ConfigureVersion(e.Property(x => x.RowVersion)); e.HasIndex(x => new { x.RecipientMemberId, x.Status, x.ExpiresAt }); });
+        model.Entity<Connection>(e => { e.ToTable("connection", "social"); e.HasKey(x => x.ConnectionId); e.Property(x => x.ConnectionId).HasMaxLength(64); ConfigureVersion(e.Property(x => x.RowVersion)); e.HasIndex(x => new { x.MemberLowId, x.MemberHighId }).IsUnique(); });
+        model.Entity<MemberBlock>(e => { e.ToTable("member_block", "social"); e.HasKey(x => x.Id); e.Property(x => x.Id).HasColumnName("block_id").UseIdentityByDefaultColumn(); e.HasIndex(x => new { x.BlockerMemberId, x.BlockedMemberId }); });
+        model.Entity<Conversation>(e => { e.ToTable("conversation", "chat"); e.HasKey(x => x.ConversationId); e.Property(x => x.ConversationId).HasMaxLength(64); ConfigureVersion(e.Property(x => x.RowVersion)); e.HasIndex(x => x.ConnectionId).IsUnique(); });
+        model.Entity<ConversationParticipant>(e => { e.ToTable("conversation_participant", "chat"); e.HasKey(x => new { x.ConversationId, x.MemberId }); });
+        model.Entity<Message>(e => { e.ToTable("message", "chat"); e.HasKey(x => x.MessageId); e.Property(x => x.MessageId).HasMaxLength(64); e.Property(x => x.Body).HasColumnType("text"); ConfigureVersion(e.Property(x => x.RowVersion)); e.HasIndex(x => new { x.ConversationId, x.ServerSequence }).IsUnique(); });
+        model.Entity<MessageReceipt>(e => { e.ToTable("message_receipt", "chat"); e.HasKey(x => new { x.MessageId, x.MemberId }); });
+        model.Entity<NotificationPreference>(e => { e.ToTable("notification_preference", "notification"); e.HasKey(x => new { x.MemberId, x.PurposeCode }); ConfigureVersion(e.Property(x => x.RowVersion)); });
+        model.Entity<PrivacyRequest>(e => { e.ToTable("privacy_request", "consent"); e.HasKey(x => x.PrivacyRequestId); e.Property(x => x.PrivacyRequestId).HasMaxLength(64); ConfigureVersion(e.Property(x => x.RowVersion)); e.HasIndex(x => new { x.MemberId, x.CreatedAt }); });
+        model.Entity<SyncChange>(e => { e.ToTable("sync_change", "ops"); e.HasKey(x => x.SyncSequence); e.Property(x => x.SyncSequence).ValueGeneratedOnAdd(); e.Property(x => x.PayloadJson).HasColumnType("jsonb"); e.HasIndex(x => new { x.MemberScopeId, x.SyncSequence }); });
+        model.Entity<OutboxEvent>(e => { e.ToTable("outbox_event", "ops"); e.HasKey(x => x.OutboxEventId); e.Property(x => x.OutboxEventId).HasMaxLength(64); e.Property(x => x.PayloadJson).HasColumnType("jsonb"); e.HasIndex(x => new { x.PublishedAt, x.OccurredAt }); });
+
+        foreach (var entity in model.Model.GetEntityTypes())
+            foreach (var property in entity.GetProperties())
+                if (property.GetColumnName() == property.Name) property.SetColumnName(ToSnakeCase(property.Name));
     }
+
+    private static void ConfigureVersion(Microsoft.EntityFrameworkCore.Metadata.Builders.PropertyBuilder<long> property) =>
+        property.HasColumnType("bigint").HasDefaultValue(1L).IsConcurrencyToken().ValueGeneratedOnAddOrUpdate();
+
+    private static string ToSnakeCase(string value) => string.Concat(value.Select((c, i) => i > 0 && char.IsUpper(c) ? $"_{char.ToLowerInvariant(c)}" : char.ToLowerInvariant(c).ToString()));
 }
 
 public static class LocalDevelopmentSeeder
@@ -79,10 +171,13 @@ public static class LocalDevelopmentSeeder
         var db = scope.ServiceProvider.GetRequiredService<CoreDbContext>();
         if (db.MemberProfiles.Any()) return;
         db.MemberProfiles.AddRange(
-            new MemberProfile { MemberId = "A123", DisplayName = "Asha Rao", Headline = "Pharmaceutical founder", Organization = "Aster Health", Sector = "pharmaceutical", Geography = "Selangor" },
-            new MemberProfile { MemberId = "B456", DisplayName = "Ben Lim", Headline = "Cold-chain operator", Organization = "Polar Logistics", Sector = "logistics", Geography = "Selangor" },
-            new MemberProfile { MemberId = "D111", DisplayName = "Dana Lee", Headline = "Distribution advisor", Organization = "DL Advisory", Sector = "distribution", Geography = "Kuala Lumpur" });
-        db.EventRecords.Add(new EventRecord { EventId = "event-001", Name = "OLGA Connect Pilot", StartsAt = DateTimeOffset.UtcNow.AddDays(-1), EndsAt = DateTimeOffset.UtcNow.AddDays(30) });
+            new MemberProfile { MemberId = "A123", DisplayName = "Asha Rao", Headline = "Pharmaceutical founder", Sector = "pharmaceutical", Status = "ACTIVE" },
+            new MemberProfile { MemberId = "B456", DisplayName = "Ben Lim", Headline = "Cold-chain operator", Sector = "logistics", Status = "ACTIVE" },
+            new MemberProfile { MemberId = "D111", DisplayName = "Dana Lee", Headline = "Distribution advisor", Sector = "distribution", Status = "ACTIVE" });
+        db.ConsentPolicies.AddRange(
+            new ConsentPolicy { PolicyId = "live-mode-v1", PurposeCode = "LIVE_MODE", Version = "1", ContentHash = new string('0', 64), EffectiveFrom = DateTimeOffset.UtcNow.AddYears(-1) },
+            new ConsentPolicy { PolicyId = "matching-v1", PurposeCode = "MATCHING", Version = "1", ContentHash = new string('1', 64), EffectiveFrom = DateTimeOffset.UtcNow.AddYears(-1) });
+        db.EventRecords.Add(new EventRecord { EventId = "event-001", Name = "OLGA Connect Pilot", StartsAt = DateTimeOffset.UtcNow.AddDays(-1), EndsAt = DateTimeOffset.UtcNow.AddDays(30), LiveModeEnabled = true });
         await db.SaveChangesAsync(ct);
     }
 }
