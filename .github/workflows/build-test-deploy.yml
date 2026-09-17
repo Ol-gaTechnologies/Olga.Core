@@ -136,7 +136,7 @@ jobs:
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
         run: |
           image_ref="${ACR_LOGIN_SERVER}/${IMAGE_NAME}@${IMAGE_DIGEST}"
-          revision_suffix="${GITHUB_SHA:0:12}"
+          revision_suffix="${GITHUB_SHA:0:8}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
           az containerapp ingress update \
             --name "$CONTAINER_APP_NAME" \
