@@ -60,6 +60,7 @@ Configure the API container with the following exact environment-variable names:
 | --- | --- | --- |
 | `ConnectionStrings__PostgreSql` | Yes; use a Key Vault-backed Container Apps secret reference | PostgreSQL connection string using the server FQDN, database `olga_connect_dev`, port `5432`, and TLS certificate verification |
 | `Mvp__DefaultMemberId` | No | Member used by anonymous MVP requests that omit `X-Member-Id`; defaults to `A123` |
+| `Diagnostics__IncludeExceptionDetails` | No | Includes `stack_trace` in unhandled-error responses in `dev`; error messages are returned in every environment and the workflow hides stack traces in `prd` |
 
 The initial MVP API does not validate caller identity. Requests may select any member with `X-Member-Id`, so this deployment must not be treated as suitable for public or sensitive member data. Restore OIDC/JWT validation before expanding access beyond the controlled MVP environment. Never place the database secret value in GitHub variables, workflow YAML, application settings, logs, or OpenAPI documents.
 

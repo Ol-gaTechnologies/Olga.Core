@@ -13,6 +13,7 @@ using Olga.Core.Infrastructure;
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.ConfigureHttpJsonOptions(o => { o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower; o.SerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull; });
 var defaultMemberId = builder.Configuration["Mvp:DefaultMemberId"] ?? "A123";
+var includeExceptionDetails = builder.Configuration.GetValue<bool>("Diagnostics:IncludeExceptionDetails");
 builder.Services.AddOpenApi(options =>
 {
     options.AddDocumentTransformer((document, _, _) =>
@@ -55,7 +56,11 @@ app.Use(async (context, next) =>
     catch (PostgresException ex) when (ex.SqlState == "P0002") { await Error(context, 404, "RESOURCE_NOT_FOUND"); }
     catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.InvalidParameterValue) { await Error(context, 400, "REQUEST_INVALID"); }
     catch (Exception ex) when (PostgreSqlConfiguration.IsUnavailable(ex)) { await Error(context, 503, "DATABASE_UNAVAILABLE"); }
-    catch (Exception) { await Error(context, 500, "INTERNAL_ERROR"); }
+    catch (Exception ex)
+    {
+        app.Logger.LogError(ex, "Unhandled exception for {Method} {Path}; correlation ID {CorrelationId}", context.Request.Method, context.Request.Path, context.TraceIdentifier);
+        await Error(context, 500, "INTERNAL_ERROR", ex, includeExceptionDetails);
+    }
 });
 app.MapOpenApi("/swagger/{documentName}/swagger.json");
 app.UseSwaggerUI(options =>
@@ -118,11 +123,19 @@ static long DecodeCursor(string? cursor)
     catch (FormatException) { throw new DomainException("SYNC_CURSOR_INVALID"); }
 }
 
-static async Task Error(HttpContext context, int status, string code)
+static async Task Error(HttpContext context, int status, string code, Exception? exception = null, bool includeStackTrace = false)
 {
     if (context.Response.HasStarted) return;
     context.Response.StatusCode = status; context.Response.ContentType = "application/problem+json";
-    await context.Response.WriteAsJsonAsync(new ApiError(code, code switch { "IDEMPOTENCY_KEY_REQUIRED" => "An Idempotency-Key header is required for every mutation.", "IF_MATCH_REQUIRED" => "An If-Match header is required.", "RESOURCE_VERSION_CONFLICT" => "The resource changed since it was read.", "INTERNAL_ERROR" => "The request could not be completed.", _ => "The request is invalid or cannot be completed in its current state." }, context.TraceIdentifier));
+    var message = exception?.GetBaseException().Message ?? code switch
+    {
+        "IDEMPOTENCY_KEY_REQUIRED" => "An Idempotency-Key header is required for every mutation.",
+        "IF_MATCH_REQUIRED" => "An If-Match header is required.",
+        "RESOURCE_VERSION_CONFLICT" => "The resource changed since it was read.",
+        "INTERNAL_ERROR" => "The request could not be completed.",
+        _ => "The request is invalid or cannot be completed in its current state."
+    };
+    await context.Response.WriteAsJsonAsync(new ApiError(code, message, context.TraceIdentifier, StackTrace: includeStackTrace ? exception?.ToString() : null));
 }
 
 public partial class Program { }
