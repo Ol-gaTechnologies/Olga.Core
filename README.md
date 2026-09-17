@@ -31,7 +31,19 @@ dotnet run --project src/Olga.Core.Api
 
 All endpoints are anonymous for the initial MVP. Member-scoped endpoints use the optional `X-Member-Id` header to select a member and otherwise fall back to `Mvp__DefaultMemberId` (`A123` by default). Local development seeds members `A123`, `B456`, `D111` plus `event-001`. Do not treat this member selector as authentication; restore a verified identity provider before exposing member data beyond the MVP environment.
 
-The first request to any member-scoped endpoint idempotently provisions a private `DRAFT` member profile. Concurrent first requests are safe on PostgreSQL. `GET /v1/me/profile` returns the draft for onboarding, and the first profile update activates it. Draft profiles are neither visible through member lookup nor eligible to initiate connections. Provisioning and profile updates never reactivate an existing suspended, anonymized, or deleted profile. The public `GET /v1/events` endpoint does not provision a member.
+The identity lifecycle owns `iam.member`. A client must never invent a member ID: registration creates the `iam.member` row first, and then `GET` or `PATCH /v1/me/profile` idempotently provisions its private `DRAFT` profile. An unknown identity receives `MEMBER_NOT_REGISTERED` instead of a database error. The first profile update activates the draft. Draft profiles are neither visible through member lookup nor eligible to initiate connections. Profile provisioning does not run on unrelated member-scoped operations and never reactivates a suspended, anonymized, or deleted profile.
+
+## MVP request headers
+
+Swagger displays each applicable header on the operation that consumes it:
+
+| Header | Applies to | Client behavior |
+| --- | --- | --- |
+| `X-Member-Id` | Member-scoped operations | Optional only because the MVP falls back to `Mvp__DefaultMemberId`; maximum 64 characters. The ID must already exist in `iam.member`. Replace this header with a validated JWT identity before production use. |
+| `Idempotency-Key` | Every `POST`, `PUT`, `PATCH`, and `DELETE` under `/v1` | Required, maximum 128 characters. Generate a UUID for each new logical action and reuse that same value for retries of that action. Never reuse it with a different payload. |
+| `If-Match` | `PATCH /v1/me/profile` | Send the ETag returned by `GET /v1/me/profile`. It may be omitted only while completing the initial empty draft. |
+
+The UI or other calling client generates `Idempotency-Key`; identity/onboarding supplies the member ID. Durable replay storage is currently implemented only for selected transactional operations, as recorded in the senior architecture review, so extending it to every mutation remains a production-readiness requirement.
 
 ## Endpoint groups
 
@@ -40,7 +52,7 @@ The first request to any member-scoped endpoint idempotently provisions a privat
 - Social: `POST/PATCH /v1/connection-requests`, `GET /v1/connections`, `POST /v1/members/block`
 - Chat: `GET/POST /v1/conversations/{id}/messages`
 - Preferences and privacy: `PATCH /v1/me/notification-preferences`, `POST /v1/me/privacy-requests`
-- Offline sync: `GET /v1/sync/changes?after={cursor}&limit={n}`
+- Offline sync: `GET /v1/sync/changes?cursor={opaque-cursor}&limit={n}`
 - Operations: `GET /health`, `GET /ready`, `GET /swagger/v1/swagger.json`, Swagger UI at `/swagger`
 
 ## Developer orientation
@@ -115,7 +127,7 @@ app.MapGet(
 
 All public REST routes must be explicitly versioned under `/v1`. Give each operation a unique name and a meaningful Swagger tag. New routes appear automatically in the Swagger UI at `/swagger`.
 
-For `POST`, `PUT`, `PATCH`, and `DELETE` routes, clients must send an `Idempotency-Key` header. Use `If-Match` with the resource ETag when a mutation can lose concurrent updates. Feeds, chats, and notifications must use opaque cursor pagination.
+For `POST`, `PUT`, `PATCH`, and `DELETE` routes, clients must send an `Idempotency-Key` header; the OpenAPI transformer documents it automatically. Map member operations through `memberV1` so Swagger exposes the temporary MVP member selector. Mark concurrency-controlled routes with `IfMatchMetadata` so Swagger exposes `If-Match`. Use `If-Match` with the resource ETag when a mutation can lose concurrent updates. Feeds, chats, and notifications must use opaque cursor pagination.
 
 ### 5. Add tests and verify
 

@@ -12,6 +12,9 @@ using Olga.Core.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.ConfigureHttpJsonOptions(o => { o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower; o.SerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull; });
+const string memberIdHeader = "X-Member-Id";
+const string idempotencyKeyHeader = "Idempotency-Key";
+const string ifMatchHeader = "If-Match";
 var defaultMemberId = builder.Configuration["Mvp:DefaultMemberId"] ?? "A123";
 var includeExceptionDetails = builder.Configuration.GetValue<bool>("Diagnostics:IncludeExceptionDetails");
 builder.Services.AddOpenApi(options =>
@@ -20,6 +23,22 @@ builder.Services.AddOpenApi(options =>
     {
         // Resolve API calls against the origin that served Swagger, never Kestrel's internal HTTP endpoint.
         document.Servers = [new OpenApiServer { Url = "/" }];
+        return Task.CompletedTask;
+    });
+    options.AddOperationTransformer((operation, context, _) =>
+    {
+        var metadata = context.Description.ActionDescriptor.EndpointMetadata;
+        if (metadata.OfType<MemberContextMetadata>().Any())
+            AddHeaderParameter(operation, memberIdHeader, false, $"MVP caller member ID. Defaults to {defaultMemberId} when omitted.", 64);
+
+        var method = context.Description.HttpMethod;
+        if (context.Description.RelativePath?.StartsWith("v1/", StringComparison.OrdinalIgnoreCase) == true
+            && method is "POST" or "PUT" or "PATCH" or "DELETE")
+            AddHeaderParameter(operation, idempotencyKeyHeader, true, "Unique key for this logical mutation. Reuse the same key only when retrying the same request.", 128);
+
+        if (metadata.OfType<IfMatchMetadata>().Any())
+            AddHeaderParameter(operation, ifMatchHeader, false, "ETag returned by GET /v1/me/profile. Required after the initial empty draft update.");
+
         return Task.CompletedTask;
     });
 });
@@ -39,7 +58,7 @@ app.Use(async (context, next) =>
     try
     {
         if (context.Request.ContentLength is > 256_000) { await Error(context, 413, "PAYLOAD_TOO_LARGE"); return; }
-        var idempotencyKey = context.Request.Headers["Idempotency-Key"].ToString();
+        var idempotencyKey = context.Request.Headers[idempotencyKeyHeader].ToString();
         if (context.Request.Path.StartsWithSegments("/v1") && context.Request.Method is not ("GET" or "HEAD" or "OPTIONS") && (string.IsNullOrWhiteSpace(idempotencyKey) || idempotencyKey.Length > 128))
         {
             await Error(context, 400, "IDEMPOTENCY_KEY_REQUIRED");
@@ -50,7 +69,9 @@ app.Use(async (context, next) =>
     catch (DomainException ex) { await Error(context, ex.StatusCode, ex.Code); }
     catch (DbUpdateConcurrencyException) { await Error(context, 409, "RESOURCE_VERSION_CONFLICT"); }
     catch (DbUpdateException ex) when (PostgreSqlConfiguration.IsUniqueViolation(ex)) { await Error(context, 409, "RESOURCE_CONFLICT"); }
+    catch (DbUpdateException ex) when (PostgreSqlConfiguration.IsForeignKeyViolation(ex)) { await Error(context, 409, "RESOURCE_REFERENCE_NOT_FOUND"); }
     catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation) { await Error(context, 409, "IDEMPOTENCY_KEY_REUSED"); }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.ForeignKeyViolation) { await Error(context, 409, "RESOURCE_REFERENCE_NOT_FOUND"); }
     catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.CheckViolation) { await Error(context, 409, "RESOURCE_STATE_CONFLICT"); }
     catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.InsufficientPrivilege) { await Error(context, 403, "RESOURCE_FORBIDDEN"); }
     catch (PostgresException ex) when (ex.SqlState == "P0002") { await Error(context, 404, "RESOURCE_NOT_FOUND"); }
@@ -72,15 +93,17 @@ app.MapHealthChecks("/health");
 app.MapGet("/ready", async (CoreDbContext db, CancellationToken ct) => await db.Database.CanConnectAsync(ct) ? Results.Ok(new { status = "ready" }) : Results.StatusCode(503));
 
 var v1 = app.MapGroup("/v1");
-var memberV1 = app.MapGroup("/v1");
-memberV1.AddEndpointFilter(async (invocationContext, next) =>
+var memberV1 = app.MapGroup("/v1").WithMetadata(new MemberContextMetadata());
+var profileV1 = memberV1.MapGroup("/me/profile");
+profileV1.AddEndpointFilter(async (invocationContext, next) =>
 {
     var context = invocationContext.HttpContext;
     await context.RequestServices.GetRequiredService<ICoreService>().ProvisionMemberAsync(Member(context), context.RequestAborted);
     return await next(invocationContext);
 });
-memberV1.MapGet("/me/profile", async (HttpContext c, ICoreService s, CancellationToken ct) => { var id = Member(c); var value = await s.GetOwnProfileAsync(id, ct); c.Response.Headers.ETag = value.ETag; return Results.Ok(value); });
-memberV1.MapPatch("/me/profile", async (HttpContext c, ProfileUpdateRequest body, ICoreService s, CancellationToken ct) => { var value = await s.UpdateProfileAsync(Member(c), body, c.Request.Headers.IfMatch.FirstOrDefault(), ct); c.Response.Headers.ETag = value.ETag; return Results.Ok(value); });
+profileV1.MapGet("", async (HttpContext c, ICoreService s, CancellationToken ct) => { var id = Member(c); var value = await s.GetOwnProfileAsync(id, ct); c.Response.Headers.ETag = value.ETag; return Results.Ok(value); });
+profileV1.MapPatch("", async (HttpContext c, ProfileUpdateRequest body, ICoreService s, CancellationToken ct) => { var value = await s.UpdateProfileAsync(Member(c), body, c.Request.Headers.IfMatch.FirstOrDefault(), ct); c.Response.Headers.ETag = value.ETag; return Results.Ok(value); })
+    .WithMetadata(new IfMatchMetadata());
 memberV1.MapGet("/members/{memberId}", async (HttpContext c, string memberId, ICoreService s, CancellationToken ct) => Results.Ok(await s.GetVisibleProfileAsync(Member(c), memberId, ct)));
 memberV1.MapPost("/me/consents", async (HttpContext c, ConsentRequest body, ICoreService s, CancellationToken ct) => Results.Created("/v1/me/consents", await s.RecordConsentAsync(Member(c), body, ct)));
 v1.MapGet("/events", async (ICoreService s, CancellationToken ct) => Results.Ok(await s.GetEventsAsync(ct)));
@@ -104,11 +127,28 @@ app.Run();
 
 string Member(HttpContext context)
 {
-    var id = context.Request.Headers["X-Member-Id"].FirstOrDefault();
+    var id = context.Request.Headers[memberIdHeader].FirstOrDefault();
     return !string.IsNullOrWhiteSpace(id) ? id : defaultMemberId;
 }
 
-static string Idempotency(HttpContext context) => context.Request.Headers["Idempotency-Key"].ToString();
+string Idempotency(HttpContext context) => context.Request.Headers[idempotencyKeyHeader].ToString();
+
+static void AddHeaderParameter(OpenApiOperation operation, string name, bool required, string description, int? maxLength = null)
+{
+    operation.Parameters ??= [];
+    if (operation.Parameters.Any(parameter =>
+            parameter.In == ParameterLocation.Header
+            && string.Equals(parameter.Name, name, StringComparison.OrdinalIgnoreCase))) return;
+
+    operation.Parameters.Add(new OpenApiParameter
+    {
+        Name = name,
+        In = ParameterLocation.Header,
+        Required = required,
+        Description = description,
+        Schema = new OpenApiSchema { Type = JsonSchemaType.String, MaxLength = maxLength }
+    });
+}
 
 static long DecodeCursor(string? cursor)
 {
@@ -131,6 +171,8 @@ static async Task Error(HttpContext context, int status, string code, Exception?
     {
         "IDEMPOTENCY_KEY_REQUIRED" => "An Idempotency-Key header is required for every mutation.",
         "IF_MATCH_REQUIRED" => "An If-Match header is required.",
+        "MEMBER_NOT_REGISTERED" => "The member must be registered by the identity service before profile onboarding.",
+        "RESOURCE_REFERENCE_NOT_FOUND" => "A referenced resource does not exist.",
         "RESOURCE_VERSION_CONFLICT" => "The resource changed since it was read.",
         "INTERNAL_ERROR" => "The request could not be completed.",
         _ => "The request is invalid or cannot be completed in its current state."
@@ -139,3 +181,5 @@ static async Task Error(HttpContext context, int status, string code, Exception?
 }
 
 public partial class Program { }
+internal sealed class MemberContextMetadata { }
+internal sealed class IfMatchMetadata { }

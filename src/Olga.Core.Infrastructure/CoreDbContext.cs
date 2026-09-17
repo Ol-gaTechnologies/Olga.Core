@@ -75,6 +75,10 @@ public sealed class CoreDbContext(DbContextOptions<CoreDbContext> options) : DbC
         AddTimestamp(command, "created_at", DateTimeOffset.UtcNow);
         var close = await OpenIfNeededAsync(ct);
         try { await command.ExecuteNonQueryAsync(ct); }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.ForeignKeyViolation && ex.ConstraintName == "fk_member_profile_member_id")
+        {
+            throw new DomainException("MEMBER_NOT_REGISTERED", 404);
+        }
         finally { if (close) await Database.CloseConnectionAsync(); }
     }
 

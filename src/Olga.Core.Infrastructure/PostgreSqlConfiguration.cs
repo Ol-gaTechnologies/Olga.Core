@@ -22,6 +22,9 @@ public static class PostgreSqlConfiguration
     public static bool IsUniqueViolation(DbUpdateException exception) =>
         exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation };
 
+    public static bool IsForeignKeyViolation(DbUpdateException exception) =>
+        exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.ForeignKeyViolation };
+
     public static bool IsUnavailable(Exception exception) =>
         exception is NpgsqlException { IsTransient: true } || exception.InnerException is NpgsqlException { IsTransient: true };
 }

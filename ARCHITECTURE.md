@@ -122,8 +122,9 @@ Core does not proxy client requests to NLP and does not expose internal NLP proj
 ## Security invariants
 
 - No client connects directly to Azure Database for PostgreSQL, Blob Storage, or messaging infrastructure.
-- During the initial MVP, member context comes from optional `X-Member-Id` and otherwise uses `Mvp__DefaultMemberId`; it is not an authenticated identity.
-- Resolving member context for a member-scoped endpoint idempotently provisions a private `DRAFT` profile when none exists. PostgreSQL uses `ON CONFLICT DO NOTHING` so concurrent first requests converge on one row. Drafts cannot be discovered or initiate connections. Existing lifecycle states are never overwritten or reactivated by profile updates, and only profile completion promotes a draft to `ACTIVE`.
+- During the initial MVP, member context comes from optional `X-Member-Id` and otherwise uses `Mvp__DefaultMemberId`; it is not an authenticated identity and must be replaced by a validated JWT identity before production use.
+- Identity registration owns and creates `iam.member`. Profile onboarding never creates an identity row. `GET` or `PATCH /v1/me/profile` idempotently provisions a private `DRAFT` profile only after its parent member exists; an unknown identity fails with `MEMBER_NOT_REGISTERED`. PostgreSQL uses `ON CONFLICT DO NOTHING` so concurrent onboarding requests converge on one row. Drafts cannot be discovered or initiate connections. Existing lifecycle states are never overwritten or reactivated by profile updates, and only profile completion promotes a draft to `ACTIVE`.
+- Every `/v1` mutation requires a client-generated `Idempotency-Key`; retries of one logical action reuse the key. Concurrency-controlled updates use the last returned ETag in `If-Match`. Swagger documents these headers on applicable operations.
 - Consent and authorization fail closed.
 - Presence is coarse, short-lived, and never exposed to another member.
 - Chat authorization is re-evaluated on every read and send.
