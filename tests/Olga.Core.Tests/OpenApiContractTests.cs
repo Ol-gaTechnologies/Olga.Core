@@ -63,6 +63,20 @@ public sealed class OpenApiContractTests : IClassFixture<WebApplicationFactory<P
         Assert.False(await db.MemberProfiles.AnyAsync(profile => profile.MemberId == callerId));
     }
 
+    [Fact]
+    public async Task Member_routes_reject_an_oversized_member_header_before_data_access()
+    {
+        using var client = factory.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/v1/members/A123");
+        request.Headers.Add("X-Member-Id", new string('x', 65));
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
+        Assert.Equal("MEMBER_ID_INVALID", body.RootElement.GetProperty("code").GetString());
+    }
+
     private async Task<JsonDocument> GetDocumentAsync(string? forwardedProto = null)
     {
         using var client = factory.CreateClient();

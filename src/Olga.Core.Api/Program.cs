@@ -128,7 +128,9 @@ app.Run();
 string Member(HttpContext context)
 {
     var id = context.Request.Headers[memberIdHeader].FirstOrDefault();
-    return !string.IsNullOrWhiteSpace(id) ? id : defaultMemberId;
+    if (string.IsNullOrWhiteSpace(id)) return defaultMemberId;
+    if (id.Length > 64) throw new DomainException("MEMBER_ID_INVALID");
+    return id;
 }
 
 string Idempotency(HttpContext context) => context.Request.Headers[idempotencyKeyHeader].ToString();
