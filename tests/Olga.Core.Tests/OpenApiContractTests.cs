@@ -98,7 +98,8 @@ public sealed class OpenApiContractTests : IClassFixture<WebApplicationFactory<P
         var header = operation.GetProperty("parameters").EnumerateArray()
             .Single(parameter => parameter.GetProperty("in").GetString() == "header"
                 && string.Equals(parameter.GetProperty("name").GetString(), name, StringComparison.OrdinalIgnoreCase));
-        Assert.Equal(required, header.GetProperty("required").GetBoolean());
+        var actualRequired = header.TryGetProperty("required", out var requiredProperty) && requiredProperty.GetBoolean();
+        Assert.Equal(required, actualRequired);
         if (maxLength is not null)
             Assert.Equal(maxLength.Value, header.GetProperty("schema").GetProperty("maxLength").GetInt32());
     }
